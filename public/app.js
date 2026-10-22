@@ -3,6 +3,12 @@
   const today = "2026-10-18";
   window.meetingsApp = function () {
     return {
+      authState: "checking",
+      authUser: null, authSession: null, profile: null,
+      memberships: [], currentMembership: null, currentOrganization: null,
+      selectedMembershipId: "", loginEmail: "", loginBusy: false,
+      authError: "", authMessage: "", organizationName: "", organizationSlug: "",
+      organizationBusy: false, authSubscription: null,
       page: "dashboard", pageTitle: "Dashboard", mobileNav: false,
       demoToday: today, selectedMeeting: null,
       meetingSearch: "", meetingFilter: "All", meetingYear: "All",
@@ -72,9 +78,203 @@
         { id: "rem-005", meetingId: "mtg-003", title: "Water & Infrastructure Review", date: "2026-11-03", time: "10:00 AM", meetingTime: "10:00 AM", offset: "24 hours before", channel: "In-app demo", sent: false, cancelled: false },
         { id: "rem-006", meetingId: "mtg-004", title: "Finance & Vendor Review", date: "2026-11-12", time: "4:30 PM", meetingTime: "5:30 PM", offset: "1 hour before", channel: "In-app demo", sent: false, cancelled: false }
       ],
-      init() {
+      async init() {
         this.sortMeetings();
         this.selectedMeeting = null;
+        this.authState = "checking";
+        const client = window.supabaseClient;
+        if (!client) {
+          this.authState = "error";
+          this.authError = "Supabase could not initialize. Refresh the page or check the project configuration.";
+          return;
+        }
+        const app = this;
+        const listener = client.auth.onAuthStateChange((event, session) => {
+          if (event === "SIGNED_OUT") {
+            setTimeout(() => {
+              app.resetAuthContext();
+              app.authState = "signedOut";
+            }, 0);
+          } else if (session) {
+            app.authSession = session;
+            setTimeout(() => app.loadUserContext(session), 0);
+          } else if (event === "INITIAL_SESSION") {
+            setTimeout(() => {
+              if (app.authState === "checking") app.authState = "signedOut";
+            }, 0);
+          }
+        });
+        this.authSubscription = listener?.data?.subscription || null;
+        const { data, error } = await client.auth.getSession();
+        if (error) {
+          this.authState = "error";
+          this.authError = "Unable to check your session: " + error.message;
+          return;
+        }
+        if (data?.session) {
+          await this.loadUserContext(data.session);
+        } else if (this.authState === "checking") {
+          this.authState = "signedOut";
+        }
+      },
+      async sendMagicLink() {
+        const email = String(this.loginEmail || "").trim().toLowerCase();
+        if (!email) {
+          this.authError = "Enter your registered email address.";
+          return;
+        }
+        this.loginBusy = true;
+        this.authError = "";
+        this.authMessage = "";
+        try {
+          const { error } = await window.supabaseClient.auth.signInWithOtp({
+            email,
+            options: {
+              emailRedirectTo: window.location.origin + "/",
+              shouldCreateUser: false
+            }
+          });
+          if (error) {
+            this.authError = error.message;
+          } else {
+            this.authMessage = "If this email belongs to a registered account, a sign-in link has been sent. Open it in this browser to continue.";
+          }
+        } catch (err) {
+          this.authError = err?.message || "Could not request a sign-in link.";
+        } finally {
+          this.loginBusy = false;
+        }
+      },
+      async loadUserContext(session, force = false) {
+        if (!session?.user) {
+          this.resetAuthContext();
+          this.authState = "signedOut";
+          return;
+        }
+        const userId = session.user.id;
+        if (!force && this.authUser?.id === userId && (this.authState === "loading" || this.authState === "ready" || this.authState === "noMembership")) return;
+        this.authState = "loading";
+        this.authError = "";
+        this.authSession = session;
+        this.authUser = session.user;
+        const client = window.supabaseClient;
+        try {
+          const results = await Promise.all([
+            client.from("profiles").select("id, full_name, email, phone, avatar_url").eq("id", userId).maybeSingle(),
+            client.from("organization_memberships").select("id, organization_id, role, status, committee_title, created_at").eq("user_id", userId).eq("status", "active").order("created_at", { ascending: true })
+          ]);
+          const profileResult = results[0];
+          const membershipResult = results[1];
+          if (profileResult.error) throw new Error("Could not load your profile: " + profileResult.error.message);
+          if (membershipResult.error) throw new Error("Could not load committee memberships: " + membershipResult.error.message);
+          this.profile = profileResult.data || {
+            id: userId,
+            full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || "",
+            email: session.user.email || ""
+          };
+          if (!this.profile.email) this.profile.email = session.user.email || "";
+          const rows = membershipResult.data || [];
+          if (!rows.length) {
+            this.memberships = [];
+            this.currentMembership = null;
+            this.currentOrganization = null;
+            this.selectedMembershipId = "";
+            this.organizationName = "";
+            this.organizationSlug = "";
+            this.authState = "noMembership";
+            return;
+          }
+          const organizationIds = [...new Set(rows.map(row => row.organization_id))];
+          const { data: organizations, error: organizationError } = await client.from("organizations").select("id, name, slug, timezone").in("id", organizationIds);
+          if (organizationError) throw new Error("Could not load your committee workspace: " + organizationError.message);
+          const orgById = Object.fromEntries((organizations || []).map(org => [org.id, org]));
+          const resolved = rows.map(row => ({ ...row, organization: orgById[row.organization_id] })).filter(row => !!row.organization);
+          if (!resolved.length) throw new Error("Your membership is active, but no accessible organization was returned. Check the organizations table policies.");
+          this.memberships = resolved;
+          const chosen = resolved.find(m => m.id === this.selectedMembershipId) || resolved[0];
+          this.switchMembership(chosen.id);
+          this.authState = "ready";
+        } catch (err) {
+          this.authError = err?.message || "Unable to load your committee access.";
+          this.authState = "error";
+        }
+      },
+      switchMembership(membershipId) {
+        const membership = this.memberships.find(item => item.id === membershipId);
+        if (!membership) return;
+        this.selectedMembershipId = membership.id;
+        this.currentMembership = membership;
+        this.currentOrganization = membership.organization;
+      },
+      async createOrganization() {
+        if (!this.authSession?.user || this.organizationBusy) return;
+        const name = String(this.organizationName || "").trim();
+        const slug = this.slugify(this.organizationSlug || name);
+        if (!name || !slug) {
+          this.authError = "Enter a committee name and a valid workspace slug.";
+          return;
+        }
+        this.organizationBusy = true;
+        this.authError = "";
+        try {
+          const { data, error } = await window.supabaseClient.rpc("create_organization", {
+            p_name: name,
+            p_slug: slug,
+            p_timezone: "Asia/Kolkata"
+          });
+          if (error) throw error;
+          if (!data) throw new Error("The workspace function did not return an organization ID.");
+          await this.loadUserContext(this.authSession, true);
+          if (this.authState === "ready") this.toast("Workspace created successfully.");
+        } catch (err) {
+          this.authError = err?.message || "Could not create the workspace.";
+        } finally {
+          this.organizationBusy = false;
+        }
+      },
+      async retryAuth() {
+        this.authError = "";
+        this.authState = "checking";
+        try {
+          const { data, error } = await window.supabaseClient.auth.getSession();
+          if (error) throw error;
+          if (data?.session) await this.loadUserContext(data.session, true);
+          else this.authState = "signedOut";
+        } catch (err) {
+          this.authError = err?.message || "Could not verify the session.";
+          this.authState = "error";
+        }
+      },
+      async signOut() {
+        try {
+          const { error } = await window.supabaseClient.auth.signOut({ scope: "local" });
+          if (error) throw error;
+          this.resetAuthContext();
+          this.authState = "signedOut";
+          this.go("dashboard");
+        } catch (err) {
+          this.authError = err?.message || "Could not sign out.";
+          this.toast("Sign-out failed. Please try again.");
+        }
+      },
+      resetAuthContext() {
+        this.authUser = null;
+        this.authSession = null;
+        this.profile = null;
+        this.memberships = [];
+        this.currentMembership = null;
+        this.currentOrganization = null;
+        this.selectedMembershipId = "";
+        this.showMeetingModal = false;
+        this.showAgendaModal = false;
+        this.showActionModal = false;
+        this.showCancelModal = false;
+      },
+      slugify(value) {
+        return String(value || "").normalize("NFKD").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      },
+      roleLabel(role) {
+        return ({ owner: "Workspace owner", admin: "Committee admin", member: "Committee member", viewer: "Read-only viewer" })[role] || "Committee member";
       },
       get upcomingCount() { return this.meetings.filter(m => m.status === "Scheduled").length; },
       get openCount() { return this.actions.filter(a => a.status !== "Completed").length; },

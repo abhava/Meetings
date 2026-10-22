@@ -12,7 +12,49 @@
 </head>
 <body>
 <div class="app-shell" x-data="meetingsApp()" x-init="init()">
-  <aside class="sidebar" :class="{'sidebar-open':mobileNav}">
+  <section class="auth-screen" x-show="authState !== 'ready'" x-cloak>
+    <div class="auth-shell">
+      <div class="auth-brand"><div class="brand-mark"><svg viewBox="0 0 40 40" fill="none"><rect x="5" y="6" width="30" height="28" rx="8" stroke="currentColor" stroke-width="2"/><path d="M13 15h14M13 21h9M13 27h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="29" cy="26" r="4" fill="#C5F36B" stroke="#192A25" stroke-width="1.5"/></svg></div><div><div class="brand-name">our meetings</div><div class="brand-sub">COMMITTEE WORKSPACE</div></div></div>
+      <div class="auth-grid">
+        <div class="auth-intro">
+          <div class="eyebrow">A CLEARER WAY TO WORK TOGETHER</div>
+          <h1>Good meetings start with a clear plan.</h1>
+          <p>Schedule the work. Capture the decisions. Keep every action moving.</p>
+          <div class="auth-feature-list"><div><span>✓</span><span>Every agenda, decision and minute in one place</span></div><div><span>✓</span><span>Clear ownership for follow-up actions</span></div><div><span>✓</span><span>Committee access protected by your account</span></div></div>
+        </div>
+        <div class="auth-card">
+          <div x-show="authState==='checking' || authState==='loading'" class="auth-state-panel"><div class="auth-spinner"></div><h2 x-text="authState==='checking'?'Checking your session':'Loading your committee workspace'"></h2><p>Please wait while we verify your access.</p></div>
+          <div x-show="authState==='signedOut'">
+            <div class="auth-card-eyebrow">SECURE MEMBER SIGN-IN</div><h2>Welcome back</h2><p class="auth-card-sub">Enter your registered email and we'll send you a secure sign-in link.</p>
+            <form class="auth-form" @submit.prevent="sendMagicLink()">
+              <label for="loginEmail">EMAIL ADDRESS</label><input id="loginEmail" type="email" required autocomplete="email" x-model.trim="loginEmail" placeholder="you@example.com">
+              <button type="submit" class="btn btn-primary auth-submit" :disabled="loginBusy"><span x-show="!loginBusy">Email me a sign-in link</span><span x-show="loginBusy">Sending link…</span></button>
+            </form>
+            <div class="auth-alert auth-alert-error" x-show="authError" x-text="authError"></div>
+            <div class="auth-alert auth-alert-success" x-show="authMessage" x-text="authMessage"></div>
+            <p class="auth-help">Only existing, registered accounts can sign in from this page.</p>
+          </div>
+          <div x-show="authState==='noMembership'">
+            <div class="auth-card-eyebrow">WORKSPACE SETUP</div><h2>Create your committee workspace</h2><p class="auth-card-sub">You're signed in as <strong x-text="authUser?.email"></strong>, but don't yet have an active committee membership. Create a workspace or contact its administrator for an invitation.</p>
+            <form class="auth-form" @submit.prevent="createOrganization()">
+              <label for="orgName">COMMITTEE / SOCIETY NAME</label><input id="orgName" type="text" required maxlength="120" x-model.trim="organizationName" @input="organizationSlug=slugify(organizationName)" placeholder="e.g. Laxmi Angan Committee">
+              <label for="orgSlug">WORKSPACE SLUG</label><input id="orgSlug" type="text" required pattern="[a-z0-9]+(-[a-z0-9]+)*" x-model.trim="organizationSlug" placeholder="laxmi-angan-committee"><p class="auth-field-help">Lowercase letters, numbers and hyphens only.</p>
+              <button type="submit" class="btn btn-primary auth-submit" :disabled="organizationBusy"><span x-show="!organizationBusy">Create workspace</span><span x-show="organizationBusy">Creating workspace…</span></button>
+            </form>
+            <div class="auth-alert auth-alert-error" x-show="authError" x-text="authError"></div>
+            <button class="auth-text-button" @click="signOut()">Sign out and use another account</button>
+          </div>
+          <div x-show="authState==='error'" class="auth-state-panel">
+            <div class="auth-error-icon">!</div><h2>We couldn't verify access</h2><p x-text="authError || 'Check your connection and try again.'"></p>
+            <button class="btn btn-primary auth-submit" @click="retryAuth()">Try again</button><button class="auth-text-button" @click="signOut()">Sign out</button>
+          </div>
+          <div class="auth-security-note"><span>▣</span><span>Sign-in is managed by Supabase. Committee access is checked against your membership.</span></div>
+        </div>
+      </div>
+      <div class="auth-footer">OUR MEETINGS <span>·</span> Private committee workspace <span>·</span> Data access is enforced by database policies</div>
+    </div>
+  </section>
+  <aside class="sidebar" x-show="authState === 'ready'" x-cloak :class="{'sidebar-open':mobileNav}">
     <div class="brand"><div class="brand-mark"><svg viewBox="0 0 40 40" fill="none"><rect x="5" y="6" width="30" height="28" rx="8" stroke="currentColor" stroke-width="2"/><path d="M13 15h14M13 21h9M13 27h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="29" cy="26" r="4" fill="#C5F36B" stroke="#192A25" stroke-width="1.5"/></svg></div><div><div class="brand-name">our meetings</div><div class="brand-sub">COMMITTEE WORKSPACE</div></div></div>
     <div class="workspace-label">WORKSPACE</div>
     <nav class="nav-list">
@@ -22,10 +64,10 @@
       <button class="nav-item" :class="{active:page==='minutes'}" @click="go('minutes')"><span class="nav-icon">▧</span>Meeting minutes</button>
       <button class="nav-item" :class="{active:page==='reminders'}" @click="go('reminders')"><span class="nav-icon">♧</span>Reminders</button>
     </nav>
-    <div class="sidebar-bottom"><div class="demo-card"><div class="demo-icon">✳</div><div><strong>Demo workspace</strong><p>Sample data only. Safe to explore.</p></div><span class="live-dot"></span></div><div class="profile"><div class="avatar">AS</div><div class="profile-copy"><strong>Alex Shah</strong><span>Committee administrator</span></div><button class="more-btn" aria-label="Profile options">···</button></div></div>
+    <div class="sidebar-bottom"><div class="demo-card"><div class="demo-icon">✳</div><div><strong>Demo workspace</strong><p>Sample data only. Safe to explore.</p></div><span class="live-dot"></span></div><div class="profile"><div class="avatar" x-text="initials(profile?.full_name || authUser?.email || 'U')"></div><div class="profile-copy"><strong x-text="profile?.full_name || authUser?.email || 'Committee member'"></strong><span x-text="roleLabel(currentMembership?.role)"></span></div><button class="more-btn" @click="signOut()" aria-label="Sign out" title="Sign out">⇥</button></div></div>
   </aside>
-  <main class="main-area">
-    <header class="topbar"><button class="mobile-menu" @click="mobileNav=!mobileNav">☰</button><div class="crumb"><span>Workspace</span><span class="crumb-slash">/</span><strong x-text="pageTitle"></strong></div><div class="top-actions"><div class="today-label"><span class="today-dot"></span> DEMO ENVIRONMENT</div><button class="icon-button" title="Notifications" @click="go('reminders')">♧<i x-show="reminders.some(r=>!r.sent)"></i></button><div class="top-avatar">AS</div></div></header>
+  <main class="main-area" x-show="authState === 'ready'" x-cloak>
+    <header class="topbar"><button class="mobile-menu" @click="mobileNav=!mobileNav">☰</button><div class="crumb"><span x-text="currentOrganization?.name || 'Workspace'">Workspace</span><span class="crumb-slash">/</span><strong x-text="pageTitle"></strong></div><div class="top-actions"><div class="today-label"><span class="today-dot"></span> DEMO RECORDS</div><select class="org-select" x-show="memberships.length>1" x-model="selectedMembershipId" @change="switchMembership(selectedMembershipId)" aria-label="Switch organization"><template x-for="membership in memberships" :key="membership.id"><option :value="membership.id" x-text="membership.organization?.name || 'Committee'"></option></template></select><button class="icon-button" title="Notifications" @click="go('reminders')">♧<i x-show="reminders.some(r=>!r.sent)"></i></button><div class="top-avatar" x-text="initials(profile?.full_name || authUser?.email || 'U')"></div></div></header>
     <div class="content">
       <section x-show="page==='dashboard'" x-cloak>
         <div class="welcome-row"><div><div class="eyebrow">SUNDAY, 18 OCTOBER 2026 <span class="eyebrow-line"></span> COMMITTEE OVERVIEW</div><h1>Good afternoon, Alex <span class="wave">✳</span></h1><p class="page-subtitle">Everything your committee needs to keep moving forward.</p></div><button class="btn btn-primary" @click="openCreate()"><span class="plus">＋</span> Schedule meeting</button></div>
