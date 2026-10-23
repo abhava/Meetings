@@ -56,4 +56,16 @@
 @keyframes authSpin{to{transform:rotate(360deg)}}
 .auth-error-icon{height:32px;width:32px;display:grid;place-items:center;border-radius:50%;background:#fae9e6;color:#a54c43;margin:0 auto 12px;font-weight:800}
 .org-select{max-width:180px;border:1px solid #e1e8e2;border-radius:8px;padding:7px 24px 7px 9px;background:#fff;color:#526157;font-size:10px}
-@media(max-width:760px){.auth-screen{padding:28px 16px}.auth-brand{margin-bottom:27px}.auth-grid{grid-template-columns:1fr;gap:24px}.auth-intro h1{font-size:34px;max-width:460px;letter-spacing:-1.4px}.auth-intro>p{font-size:13px}.auth-feature-list{gap:10px;margin-top:19px}.auth-feature-list>div{font-size:11px}.auth-card{padding:22px}.auth-footer{margin-top:22px}.org-select{max-width:125px}}
+/* Persisted agenda and meeting-minutes presentation */
+.agenda-item-description{font-size:10px;color:#89968e;line-height:1.55;margin:5px 0 0}.minutes-summary-panel{margin-top:14px;padding:18px}
+.minutes-summary-panel .form-field textarea{min-height:120px;font-size:11px;line-height:1.65}
+.minutes-summary-panel .agenda-footer{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:12px 0 0}
+.agenda-body select{width:100%;min-height:36px;margin:0 0 12px;padding:8px 10px;border:1px solid #e0e8e1;border-radius:8px;background:#fff;color:#405147;font-size:10px}
+.minutes-summary-text{padding:12px 14px;margin-bottom:13px;border:1px solid #e8eee8;background:#fafcf9;border-radius:8px}
+.minutes-summary-text strong{font-size:10px}
+.minutes-summary-text p{font-size:10px;line-height:1.65;color:#748279;white-space:pre-wrap;margin:6px 0 0}
+.status-draft{background:#f2f4f1;color:#718078}
+.status-in_review{background:#fbf2df;color:#9b6d24}
+.status-final{background:#eaf4e8;color:#477a4f}
+.btn:disabled,.save-note:disabled{opacity:.5;cursor:not-allowed;transform:none}
+@media(max-width:760px){.minutes-summary-panel{padding:14px}.minutes-summary-panel .agenda-footer{justify-content:stretch}.minutes-summary-panel .agenda-footer .btn{flex:1}.auth-screen{padding:28px 16px}.auth-brand{margin-bottom:27px}.auth-grid{grid-template-columns:1fr;gap:24px}.auth-intro h1{font-size:34px;max-width:460px;letter-spacing:-1.4px}.auth-intro>p{font-size:13px}.auth-feature-list{gap:10px;margin-top:19px}.auth-feature-list>div{font-size:11px}.auth-card{padding:22px}.auth-footer{margin-top:22px}.org-select{max-width:125px}}

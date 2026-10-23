@@ -12,6 +12,7 @@
       authError: "", authMessage: "", organizationName: "", organizationSlug: "",
       organizationBusy: false, authSubscription: null,
       meetingsLoading: false, meetingsLoaded: false, meetingsError: "", meetingSaveBusy: false,
+      agendaSaveBusy: false, agendaNoteSaveBusy: false, minutesSaveBusy: false,
       page: "dashboard", pageTitle: "Dashboard", mobileNav: false,
       demoToday: today, selectedMeeting: null,
       meetingSearch: "", meetingFilter: "All", meetingYear: "All",
@@ -221,6 +222,9 @@
       get canManageMeetings() {
         return ["owner", "admin"].includes(this.currentMembership?.role);
       },
+      get canRecordMinutes() {
+        return ["owner", "admin", "member"].includes(this.currentMembership?.role);
+      },
       async loadMeetingsFromDatabase() {
         const orgId = this.currentOrganization?.id;
         const client = window.supabaseClient;
@@ -241,14 +245,18 @@
               .eq("organization_id", orgId)
               .order("position", { ascending: true }),
             client.from("agenda_item_minutes")
-              .select("agenda_item_id, discussion_notes, decision_summary, decision")
+              .select("agenda_item_id, discussion_notes, decision_summary, decision, recorded_by, recorded_at, updated_at")
+              .eq("organization_id", orgId),
+            client.from("meeting_minutes")
+              .select("id, organization_id, meeting_id, summary, status, prepared_by, finalized_by, finalized_at, updated_at")
               .eq("organization_id", orgId)
           ]);
-          const [meetingResult, attendeeResult, agendaResult, minutesResult] = results;
+          const [meetingResult, attendeeResult, agendaResult, minutesResult, coverMinutesResult] = results;
           if (meetingResult.error) throw new Error("Could not load meetings: " + meetingResult.error.message);
           if (attendeeResult.error) throw new Error("Could not load meeting attendees: " + attendeeResult.error.message);
           if (agendaResult.error) throw new Error("Could not load agenda items: " + agendaResult.error.message);
           if (minutesResult.error) throw new Error("Could not load agenda notes: " + minutesResult.error.message);
+          if (coverMinutesResult.error) throw new Error("Could not load meeting minutes: " + coverMinutesResult.error.message);
 
           const attendeesByMeeting = {};
           (attendeeResult.data || []).forEach(row => {
@@ -256,6 +264,7 @@
             attendeesByMeeting[row.meeting_id].push(row.attendee_name || row.attendee_email || "Committee member");
           });
           const minutesByAgenda = Object.fromEntries((minutesResult.data || []).map(row => [row.agenda_item_id, row]));
+          const coverMinutesByMeeting = Object.fromEntries((coverMinutesResult.data || []).map(row => [row.meeting_id, row]));
           const agendaByMeeting = {};
           (agendaResult.data || []).forEach(row => {
             if (!agendaByMeeting[row.meeting_id]) agendaByMeeting[row.meeting_id] = [];
@@ -269,33 +278,45 @@
               notes: minutes.discussion_notes || "",
               decision: minutes.decision_summary || "",
               decisionStatus: minutes.decision || "none",
+              minutesSaved: !!minutes.agenda_item_id,
+              minutesUpdatedAt: minutes.updated_at || null,
               expanded: false
             });
           });
-          this.meetings = (meetingResult.data || []).map(row => ({
-            id: row.id,
-            organizationId: row.organization_id,
-            title: row.title,
-            description: row.description || "",
-            type: row.meeting_type || "committee",
-            date: this.dateForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
-            time: this.timeForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
-            startsAt: row.starts_at,
-            endsAt: row.ends_at,
-            timezone: row.timezone || this.currentOrganization.timezone || "Asia/Kolkata",
-            venue: row.venue || row.meeting_url || "Venue to be confirmed",
-            meetingUrl: row.meeting_url || "",
-            status: this.toUiMeetingStatus(row.status),
-            cancelReason: row.cancellation_reason || "",
-            createdBy: row.created_by === this.authUser?.id
-              ? (this.profile?.full_name || this.authUser?.email || "You")
-              : "Committee member",
-            updated: row.updated_at
-              ? new Date(row.updated_at).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
-              : "—",
-            attendees: attendeesByMeeting[row.id] || [],
-            agenda: agendaByMeeting[row.id] || []
-          }));
+          this.meetings = (meetingResult.data || []).map(row => {
+            const coverMinutes = coverMinutesByMeeting[row.id] || null;
+            return {
+              id: row.id,
+              organizationId: row.organization_id,
+              title: row.title,
+              description: row.description || "",
+              type: row.meeting_type || "committee",
+              date: this.dateForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
+              time: this.timeForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
+              startsAt: row.starts_at,
+              endsAt: row.ends_at,
+              timezone: row.timezone || this.currentOrganization.timezone || "Asia/Kolkata",
+              venue: row.venue || row.meeting_url || "Venue to be confirmed",
+              meetingUrl: row.meeting_url || "",
+              status: this.toUiMeetingStatus(row.status),
+              cancelReason: row.cancellation_reason || "",
+              minutesRecordId: coverMinutes?.id || null,
+              minutesSummary: coverMinutes?.summary || "",
+              minutesStatus: coverMinutes?.status || "draft",
+              minutesPreparedBy: coverMinutes?.prepared_by || null,
+              minutesFinalizedBy: coverMinutes?.finalized_by || null,
+              minutesFinalizedAt: coverMinutes?.finalized_at || null,
+              minutesUpdatedAt: coverMinutes?.updated_at || null,
+              createdBy: row.created_by === this.authUser?.id
+                ? (this.profile?.full_name || this.authUser?.email || "You")
+                : "Committee member",
+              updated: row.updated_at
+                ? new Date(row.updated_at).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
+                : "—",
+              attendees: attendeesByMeeting[row.id] || [],
+              agenda: agendaByMeeting[row.id] || []
+            };
+          });
           this.meetingsLoaded = true;
           if (this.selectedMeeting) {
             this.selectedMeeting = this.meetings.find(m => m.id === this.selectedMeeting.id) || null;
@@ -456,7 +477,14 @@
       },
       get minutesMeetings() {
         const q = this.minutesSearch.toLowerCase().trim();
-        return this.meetings.filter(m => (m.status === "Completed" || m.agenda.some(a => a.notes || a.decision)) && (this.minutesYear === "All" || m.date.startsWith(this.minutesYear)) && (!q || [m.title,m.venue,...m.agenda.map(a=>a.title+" "+a.notes+" "+a.decision)].join(" ").toLowerCase().includes(q))).sort((a,b) => b.date.localeCompare(a.date));
+        return this.meetings.filter(m =>
+          (m.status === "Completed" || m.minutesRecordId || m.minutesSummary || m.agenda.some(a => a.minutesSaved || a.notes || a.decision || a.decisionStatus !== "none")) &&
+          (this.minutesYear === "All" || m.date.startsWith(this.minutesYear)) &&
+          (!q || [m.title, m.venue, m.minutesSummary, this.minutesStatusLabel(m.minutesStatus), ...m.agenda.map(a => a.title + " " + a.notes + " " + a.decision)].join(" ").toLowerCase().includes(q))
+        ).sort((a,b) => b.date.localeCompare(a.date));
+      },
+      minutesStatusLabel(status) {
+        return ({ draft: "Draft", in_review: "In review", final: "Final" })[String(status || "draft")] || "Draft";
       },
       get filteredReminders() {
         return this.reminders.filter(r => !r.cancelled && (this.reminderFilter === "All" || (this.reminderFilter === "Scheduled" ? !r.sent : r.sent))).sort((a,b) => a.date.localeCompare(b.date));
@@ -634,35 +662,217 @@
         offsets.forEach((o,i)=>{const d=new Date(base.getTime()-o.mins*60000);this.reminders.push({id:"rem-"+Date.now()+"-"+i,meetingId:m.id,title:m.title,date:d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"),time:this.toDisplayTime(String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")),meetingTime:m.time,offset:o.label,channel:"In-app demo",sent:false,cancelled:false});});
       },
       addAgendaItem() {
-        if(!this.selectedMeeting || this.selectedMeeting.status!=="Scheduled"){this.toast("Only scheduled meetings can be edited");return;}
-        this.editingAgendaId=null;this.agendaForm={title:"",category:"Discussion"};this.showAgendaModal=true;
+        if (!this.canManageMeetings) { this.toast("Only committee admins can manage agenda items."); return; }
+        if (!this.selectedMeeting || this.selectedMeeting.status !== "Scheduled") { this.toast("Only scheduled meetings can be edited."); return; }
+        this.editingAgendaId = null;
+        this.agendaForm = { title: "", category: "Discussion", description: "" };
+        this.showAgendaModal = true;
       },
       editAgenda(id) {
-        const a=this.selectedMeeting?.agenda.find(x=>x.id===id);if(!a)return;
-        this.editingAgendaId=id;this.agendaForm={title:a.title,category:a.category};this.showAgendaModal=true;
+        if (!this.canManageMeetings) { this.toast("Only committee admins can manage agenda items."); return; }
+        const item = this.selectedMeeting?.agenda.find(x => x.id === id);
+        if (!item) return;
+        this.editingAgendaId = id;
+        this.agendaForm = { title: item.title, category: item.category, description: item.description || "" };
+        this.showAgendaModal = true;
       },
-      saveAgendaItem() {
-        const title=this.agendaForm.title.trim();if(!title)return;
-        if(this.editingAgendaId){const a=this.selectedMeeting.agenda.find(x=>x.id===this.editingAgendaId);if(a){a.title=title;a.category=this.agendaForm.category;}}
-        else this.selectedMeeting.agenda.push(mkAgenda("ag-"+Date.now(),title,this.agendaForm.category,"","",true));
-        this.showAgendaModal=false;this.toast(this.editingAgendaId?"Agenda item updated":"Agenda item added");
+      async saveAgendaItem() {
+        const meeting = this.selectedMeeting;
+        const title = String(this.agendaForm.title || "").trim();
+        if (!this.canManageMeetings) { this.toast("Only committee admins can manage agenda items."); return; }
+        if (!meeting || meeting.status !== "Scheduled") { this.toast("Only scheduled meetings can be edited."); return; }
+        if (!title) { this.toast("Enter an agenda item title."); return; }
+        if (this.agendaSaveBusy) return;
+        const client = window.supabaseClient;
+        const orgId = this.currentOrganization?.id;
+        if (!client || !orgId) { this.toast("Committee session is not ready."); return; }
+        const values = {
+          title,
+          category: String(this.agendaForm.category || "Discussion").toLowerCase(),
+          description: String(this.agendaForm.description || "").trim(),
+          updated_by: this.authUser.id
+        };
+        this.agendaSaveBusy = true;
+        try {
+          if (this.editingAgendaId) {
+            const { data, error } = await client.from("agenda_items").update(values)
+              .eq("id", this.editingAgendaId).eq("meeting_id", meeting.id).eq("organization_id", orgId)
+              .select("id").maybeSingle();
+            if (error) throw error;
+            if (!data) throw new Error("Agenda item was not updated. Check your role and access.");
+          } else {
+            const nextPosition = Math.max(0, ...meeting.agenda.map(item => Number(item.position) || 0)) + 1;
+            const { error } = await client.from("agenda_items").insert({
+              ...values, organization_id: orgId, meeting_id: meeting.id, position: nextPosition, created_by: this.authUser.id
+            });
+            if (error) throw error;
+          }
+          const wasEdit = !!this.editingAgendaId;
+          this.showAgendaModal = false;
+          this.editingAgendaId = null;
+          await this.loadMeetingsFromDatabase();
+          this.toast(wasEdit ? "Agenda item saved to PostgreSQL." : "Agenda item added to PostgreSQL.");
+        } catch (err) {
+          this.toast("Could not save agenda item: " + (err?.message || "Database error"));
+        } finally {
+          this.agendaSaveBusy = false;
+        }
       },
-      moveAgenda(id, direction) {
-        if(!this.selectedMeeting)return;
-        const arr=this.selectedMeeting.agenda;const i=arr.findIndex(a=>a.id===id);const j=i+direction;
-        if(i<0||j<0||j>=arr.length)return;
-        [arr[i],arr[j]]=[arr[j],arr[i]];this.selectedMeeting.agenda=arr.slice();this.toast("Agenda order updated");
+      async moveAgenda(id, direction) {
+        const meeting = this.selectedMeeting;
+        if (!this.canManageMeetings) { this.toast("Only committee admins can reorder agenda items."); return; }
+        if (!meeting || meeting.status !== "Scheduled") return;
+        const original = meeting.agenda.slice();
+        const next = original.slice();
+        const i = next.findIndex(item => item.id === id);
+        const j = i + direction;
+        if (i < 0 || j < 0 || j >= next.length) return;
+        [next[i], next[j]] = [next[j], next[i]];
+        const client = window.supabaseClient;
+        const orgId = this.currentOrganization?.id;
+        try {
+          const maxPosition = Math.max(0, ...original.map(item => Number(item.position) || 0));
+          for (let index = 0; index < next.length; index++) {
+            const { error } = await client.from("agenda_items").update({ position: maxPosition + next.length + index + 10, updated_by: this.authUser.id })
+              .eq("id", next[index].id).eq("meeting_id", meeting.id).eq("organization_id", orgId);
+            if (error) throw error;
+          }
+          for (let index = 0; index < next.length; index++) {
+            const { error } = await client.from("agenda_items").update({ position: index + 1, updated_by: this.authUser.id })
+              .eq("id", next[index].id).eq("meeting_id", meeting.id).eq("organization_id", orgId);
+            if (error) throw error;
+          }
+          await this.loadMeetingsFromDatabase();
+          this.toast("Agenda order saved to PostgreSQL.");
+        } catch (err) {
+          await this.loadMeetingsFromDatabase();
+          this.toast("Could not reorder agenda: " + (err?.message || "Database error"));
+        }
       },
-      removeAgenda(id) {
-        if(!this.selectedMeeting)return;
-        if(this.actions.some(a=>a.agendaId===id)){this.toast("This agenda item has linked actions. Keep it for the record.");return;}
-        const item=this.selectedMeeting.agenda.find(a=>a.id===id);if(!item)return;
-        if(!confirm("Remove agenda item “"+item.title+"”?"))return;
-        this.selectedMeeting.agenda=this.selectedMeeting.agenda.filter(a=>a.id!==id);this.toast("Agenda item removed");
+      async removeAgenda(id) {
+        const meeting = this.selectedMeeting;
+        if (!this.canManageMeetings) { this.toast("Only committee admins can remove agenda items."); return; }
+        if (!meeting) return;
+        if (this.actions.some(action => action.agendaId === id)) { this.toast("This agenda item has linked action items in the current view. Keep it for the record."); return; }
+        const item = meeting.agenda.find(a => a.id === id);
+        if (!item || !confirm("Remove agenda item “" + item.title + "”? Its linked minutes will also be removed.")) return;
+        try {
+          const { data, error } = await window.supabaseClient.from("agenda_items").delete()
+            .eq("id", id).eq("meeting_id", meeting.id).eq("organization_id", this.currentOrganization.id)
+            .select("id").maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error("Agenda item was not removed. Check your role and organization access.");
+          await this.loadMeetingsFromDatabase();
+          this.toast("Agenda item removed from PostgreSQL.");
+        } catch (err) {
+          this.toast("Could not remove agenda item: " + (err?.message || "A linked action item may depend on it."));
+        }
       },
-      saveAgendaNote(id) {
-        const agenda=this.selectedMeeting?.agenda.find(a=>a.id===id);
-        if(agenda){this.selectedMeeting.updated="Oct 18, 2026";this.toast("Agenda notes saved for this demo");}
+      async saveAgendaNote(id) {
+        const agenda = this.selectedMeeting?.agenda.find(item => item.id === id);
+        const meeting = this.selectedMeeting;
+        const orgId = this.currentOrganization?.id;
+        const client = window.supabaseClient;
+        if (!agenda || !meeting || !client || !orgId) return;
+        if (!this.canRecordMinutes) { this.toast("Your role does not allow recording minutes."); return; }
+        if (meeting.minutesStatus === "final") { this.toast("These minutes are final. Ask an administrator to reopen them for corrections."); return; }
+        if (this.agendaNoteSaveBusy) return;
+        const values = {
+          discussion_notes: String(agenda.notes || "").trim(),
+          decision_summary: String(agenda.decision || "").trim(),
+          decision: String(agenda.decisionStatus || "none").toLowerCase(),
+          updated_by: this.authUser.id,
+          recorded_at: new Date().toISOString()
+        };
+        this.agendaNoteSaveBusy = true;
+        try {
+          if (agenda.minutesSaved) {
+            const { data, error } = await client.from("agenda_item_minutes").update(values)
+              .eq("organization_id", orgId).eq("meeting_id", meeting.id).eq("agenda_item_id", agenda.id)
+              .select("agenda_item_id").maybeSingle();
+            if (error) throw error;
+            if (!data) throw new Error("Minutes were not updated. Refresh the meeting and try again.");
+          } else {
+            const { error } = await client.from("agenda_item_minutes").insert({
+              ...values,
+              organization_id: orgId,
+              meeting_id: meeting.id,
+              agenda_item_id: agenda.id,
+              recorded_by: this.authUser.id
+            });
+            if (error) throw error;
+          }
+          await this.loadMeetingsFromDatabase();
+          this.toast("Agenda discussion and decision saved to PostgreSQL.");
+        } catch (err) {
+          this.toast("Could not save agenda minutes: " + (err?.message || "Database error"));
+        } finally {
+          this.agendaNoteSaveBusy = false;
+        }
+      },
+      async saveMeetingMinutes(targetStatus = null) {
+        const meeting = this.selectedMeeting;
+        const orgId = this.currentOrganization?.id;
+        const client = window.supabaseClient;
+        if (!meeting || !client || !orgId) return;
+        if (!this.canRecordMinutes) { this.toast("Your role does not allow recording meeting minutes."); return; }
+        if (meeting.minutesStatus === "final" && targetStatus !== "draft") {
+          this.toast("Final minutes are locked. An administrator must reopen them first.");
+          return;
+        }
+        if (targetStatus && targetStatus !== meeting.minutesStatus && !this.canManageMeetings) {
+          this.toast("Only a committee administrator can change the minutes workflow status.");
+          return;
+        }
+        if (this.minutesSaveBusy) return;
+        const currentStatus = meeting.minutesStatus || "draft";
+        const status = targetStatus || currentStatus;
+        if (!this.canManageMeetings && (currentStatus !== "draft" || status !== "draft")) {
+          this.toast("Committee members can edit draft minutes; an administrator manages review and finalization.");
+          return;
+        }
+        const payload = {
+          summary: String(meeting.minutesSummary || "").trim(),
+          status,
+          finalized_by: status === "final" ? this.authUser.id : null,
+          finalized_at: status === "final" ? new Date().toISOString() : null
+        };
+        if (status === "final" && !payload.summary && !meeting.agenda.some(item =>
+          String(item.notes || "").trim() || String(item.decision || "").trim() || item.decisionStatus !== "none"
+        )) {
+          this.toast("Add a meeting summary or record at least one agenda discussion/decision before finalizing.");
+          return;
+        }
+        this.minutesSaveBusy = true;
+        try {
+          if (meeting.minutesRecordId) {
+            const { data, error } = await client.from("meeting_minutes").update(payload)
+              .eq("organization_id", orgId).eq("meeting_id", meeting.id)
+              .select("id").maybeSingle();
+            if (error) throw error;
+            if (!data) throw new Error("Minutes were not updated. Check your role or whether they are already final.");
+          } else {
+            const { error } = await client.from("meeting_minutes").insert({
+              organization_id: orgId,
+              meeting_id: meeting.id,
+              summary: payload.summary,
+              status,
+              prepared_by: this.authUser.id,
+              finalized_by: payload.finalized_by,
+              finalized_at: payload.finalized_at
+            });
+            if (error) throw error;
+          }
+          await this.loadMeetingsFromDatabase();
+          this.toast(status === "final" ? "Meeting minutes finalized." : status === "in_review" ? "Meeting minutes submitted for review." : "Meeting minutes draft saved to PostgreSQL.");
+        } catch (err) {
+          this.toast("Could not save meeting minutes: " + (err?.message || "Database error"));
+        } finally {
+          this.minutesSaveBusy = false;
+        }
+      },
+      get canEditAgendaMinutes() {
+        return this.canRecordMinutes && this.selectedMeeting?.minutesStatus !== "final";
       },
       async persistMeetingStatus(id, status, cancellationReason = "") {
         if (!this.canManageMeetings) {
