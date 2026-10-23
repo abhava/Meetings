@@ -7,19 +7,20 @@ Authentication:
 - Application visibility is public; authentication is still required by Our Meetings before showing the committee workspace.
 
 PostgreSQL-connected scope:
-- Meeting schedule is loaded from public.meetings, scoped to the active organization.
-- New meetings and meeting edits are saved in PostgreSQL.
-- Meeting status changes (scheduled, completed, cancelled) are saved in PostgreSQL.
+- Meeting schedule, creation/editing, and status changes use public.meetings, scoped to the active organization.
 - Attendee names are saved in public.meeting_attendees.
-- The schedule carousel and meeting list display records from the active organization's database.
+- Agenda items, descriptions, categories, and order are persisted in public.agenda_items.
+- Discussion notes, decisions, and decision statuses per agenda item are persisted in public.agenda_item_minutes.
+- Meeting-level minutes summaries use public.meeting_minutes with draft, in-review, and final states.
+- Final minutes are locked from ordinary editing; an administrator can reopen them for corrections.
+- Schedule, agenda, and minutes screens read records from the active organization's database.
 
 Still demo-only:
-- Agenda create/edit/reorder actions and agenda notes are not yet persisted.
-- Open action items, action links/carry-forward, and reminders still use sample data in browser memory.
-- Notifications are simulated; no email or WhatsApp notification is sent.
+- Open action items and action links/carry-forward still use sample data in browser memory.
+- Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
 - Sample action items and reminders do not correspond to the current PostgreSQL schedule.
 
 Before production:
-- Complete persistent agenda/minutes and action-item operations.
+- Connect action items and action links to PostgreSQL; verify RLS with owner, admin, member, viewer, and cross-organization accounts.
 - Add invitation/role-management workflows and test RLS with owner, admin, member, and cross-organization accounts.
 - Configure a scheduled notification worker before enabling real external notifications.
