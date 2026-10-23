@@ -1,6 +1,8 @@
 (function () {
   const mkAgenda = (id, title, category, notes = "", decision = "", expanded = false) => ({ id, title, category, notes, decision, expanded });
-  const today = "2026-10-18";
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(new Date());
   window.meetingsApp = function () {
     return {
       authState: "checking",
@@ -9,6 +11,7 @@
       selectedMembershipId: "", loginEmail: "", loginBusy: false,
       authError: "", authMessage: "", organizationName: "", organizationSlug: "",
       organizationBusy: false, authSubscription: null,
+      meetingsLoading: false, meetingsLoaded: false, meetingsError: "", meetingSaveBusy: false,
       page: "dashboard", pageTitle: "Dashboard", mobileNav: false,
       demoToday: today, selectedMeeting: null,
       meetingSearch: "", meetingFilter: "All", meetingYear: "All",
@@ -21,7 +24,7 @@
       meetingForm: { title: "", date: "2026-10-30", time: "18:30", venue: "Society clubhouse", status: "Scheduled", attendees: "Alex Shah, Maya Patel, Ravi Desai", description: "" },
       agendaForm: { title: "", category: "Discussion" },
       actionForm: { title: "", owner: "", due: "2026-10-30", meetingId: "mtg-004", agendaId: "", status: "Open" },
-      meetings: [
+      sampleMeetings: [
         { id: "mtg-001", title: "Monthly Committee Meeting", date: "2026-10-23", time: "6:30 PM", venue: "Clubhouse · Meeting Room", status: "Scheduled", description: "Review the committee's current priorities, confirm vendor follow-ups, and agree on the next set of community improvements.", createdBy: "Alex Shah", updated: "Oct 17, 2026", attendees: ["Alex Shah", "Maya Patel", "Ravi Desai", "Neha Kulkarni", "Karan Mehta"], agenda: [
           mkAgenda("ag-001", "Review previous meeting action items", "Follow-up", "Three items remain open from the last committee discussion. The water audit is in progress; the housekeeping quotations are pending.", "Carry forward all unfinished work with a named owner and due date.", true),
           mkAgenda("ag-002", "Water supply and leakage update", "Discussion", "Water committee to review tank-level observations, tanker usage, and the building-wise leakage survey.", "", false),
@@ -61,6 +64,7 @@
           mkAgenda("ag-022", "Assign initial research tasks", "Follow-up", "Committee members volunteered to coordinate with vendors.", "Bring estimates and options to the next review.", false)
         ] }
       ],
+      meetings: [],
       actions: [
         { id: "act-001", title: "Complete building-wise leakage survey", owner: "Vaibhav Joshi", due: "2026-10-20", status: "In Progress", meetingId: "mtg-005", meetingTitle: "September Committee Review", agendaId: "ag-014", agendaTitle: "Review water supply issues" },
         { id: "act-002", title: "Collect two housekeeping quotations", owner: "Neha Kulkarni", due: "2026-10-21", status: "Open", meetingId: "mtg-005", meetingTitle: "September Committee Review", agendaId: "ag-015", agendaTitle: "Review housekeeping service" },
@@ -202,9 +206,146 @@
       switchMembership(membershipId) {
         const membership = this.memberships.find(item => item.id === membershipId);
         if (!membership) return;
+        const organizationChanged = this.currentOrganization?.id !== membership.organization?.id;
         this.selectedMembershipId = membership.id;
         this.currentMembership = membership;
         this.currentOrganization = membership.organization;
+        if (organizationChanged) {
+          this.meetings = [];
+          this.selectedMeeting = null;
+          this.meetingsLoaded = false;
+          this.meetingsError = "";
+          this.loadMeetingsFromDatabase();
+        }
+      },
+      get canManageMeetings() {
+        return ["owner", "admin"].includes(this.currentMembership?.role);
+      },
+      async loadMeetingsFromDatabase() {
+        const orgId = this.currentOrganization?.id;
+        const client = window.supabaseClient;
+        if (!orgId || !client) return;
+        this.meetingsLoading = true;
+        this.meetingsError = "";
+        try {
+          const results = await Promise.all([
+            client.from("meetings")
+              .select("id, organization_id, title, description, meeting_type, starts_at, ends_at, timezone, venue, meeting_url, status, cancellation_reason, cancelled_at, completed_at, created_by, created_at, updated_at")
+              .eq("organization_id", orgId)
+              .order("starts_at", { ascending: true }),
+            client.from("meeting_attendees")
+              .select("id, meeting_id, membership_id, attendee_name, attendee_email")
+              .eq("organization_id", orgId),
+            client.from("agenda_items")
+              .select("id, meeting_id, title, description, category, position")
+              .eq("organization_id", orgId)
+              .order("position", { ascending: true }),
+            client.from("agenda_item_minutes")
+              .select("agenda_item_id, discussion_notes, decision_summary, decision")
+              .eq("organization_id", orgId)
+          ]);
+          const [meetingResult, attendeeResult, agendaResult, minutesResult] = results;
+          if (meetingResult.error) throw new Error("Could not load meetings: " + meetingResult.error.message);
+          if (attendeeResult.error) throw new Error("Could not load meeting attendees: " + attendeeResult.error.message);
+          if (agendaResult.error) throw new Error("Could not load agenda items: " + agendaResult.error.message);
+          if (minutesResult.error) throw new Error("Could not load agenda notes: " + minutesResult.error.message);
+
+          const attendeesByMeeting = {};
+          (attendeeResult.data || []).forEach(row => {
+            if (!attendeesByMeeting[row.meeting_id]) attendeesByMeeting[row.meeting_id] = [];
+            attendeesByMeeting[row.meeting_id].push(row.attendee_name || row.attendee_email || "Committee member");
+          });
+          const minutesByAgenda = Object.fromEntries((minutesResult.data || []).map(row => [row.agenda_item_id, row]));
+          const agendaByMeeting = {};
+          (agendaResult.data || []).forEach(row => {
+            if (!agendaByMeeting[row.meeting_id]) agendaByMeeting[row.meeting_id] = [];
+            const minutes = minutesByAgenda[row.id] || {};
+            agendaByMeeting[row.meeting_id].push({
+              id: row.id,
+              title: row.title,
+              category: this.titleCase(row.category || "discussion"),
+              description: row.description || "",
+              position: row.position,
+              notes: minutes.discussion_notes || "",
+              decision: minutes.decision_summary || "",
+              decisionStatus: minutes.decision || "none",
+              expanded: false
+            });
+          });
+          this.meetings = (meetingResult.data || []).map(row => ({
+            id: row.id,
+            organizationId: row.organization_id,
+            title: row.title,
+            description: row.description || "",
+            type: row.meeting_type || "committee",
+            date: this.dateForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
+            time: this.timeForTimezone(row.starts_at, row.timezone || this.currentOrganization.timezone || "Asia/Kolkata"),
+            startsAt: row.starts_at,
+            endsAt: row.ends_at,
+            timezone: row.timezone || this.currentOrganization.timezone || "Asia/Kolkata",
+            venue: row.venue || row.meeting_url || "Venue to be confirmed",
+            meetingUrl: row.meeting_url || "",
+            status: this.toUiMeetingStatus(row.status),
+            cancelReason: row.cancellation_reason || "",
+            createdBy: row.created_by === this.authUser?.id
+              ? (this.profile?.full_name || this.authUser?.email || "You")
+              : "Committee member",
+            updated: row.updated_at
+              ? new Date(row.updated_at).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" })
+              : "—",
+            attendees: attendeesByMeeting[row.id] || [],
+            agenda: agendaByMeeting[row.id] || []
+          }));
+          this.meetingsLoaded = true;
+          if (this.selectedMeeting) {
+            this.selectedMeeting = this.meetings.find(m => m.id === this.selectedMeeting.id) || null;
+          }
+        } catch (err) {
+          this.meetings = [];
+          this.meetingsError = err?.message || "Could not load the meeting schedule.";
+          this.meetingsLoaded = false;
+        } finally {
+          this.meetingsLoading = false;
+        }
+      },
+      toUiMeetingStatus(status) {
+        return ({ scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled" })[String(status || "").toLowerCase()] || "Scheduled";
+      },
+      toDbMeetingStatus(status) {
+        return ({ Scheduled: "scheduled", Completed: "completed", Cancelled: "cancelled" })[status] || "scheduled";
+      },
+      titleCase(value) {
+        return String(value || "").replace(/_/g, " ").replace(/\b\w/g, char => char.toUpperCase());
+      },
+      dateForTimezone(instant, timezone) {
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit"
+        }).formatToParts(new Date(instant));
+        const p = Object.fromEntries(parts.map(part => [part.type, part.value]));
+        return p.year + "-" + p.month + "-" + p.day;
+      },
+      timeForTimezone(instant, timezone) {
+        return new Intl.DateTimeFormat("en-US", {
+          timeZone: timezone, hour: "numeric", minute: "2-digit", hour12: true
+        }).format(new Date(instant)).replace(/\s+/g, " ").toUpperCase();
+      },
+      isoFromLocalDateTime(date, time, timezone) {
+        const [year, month, day] = date.split("-").map(Number);
+        const [hour, minute] = time.split(":").map(Number);
+        const targetUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+        let candidate = targetUtc;
+        for (let i = 0; i < 4; i++) {
+          const parts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+          }).formatToParts(new Date(candidate));
+          const p = Object.fromEntries(parts.map(part => [part.type, part.value]));
+          const interpretedUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
+          const adjustment = targetUtc - interpretedUtc;
+          candidate += adjustment;
+          if (adjustment === 0) break;
+        }
+        return new Date(candidate).toISOString();
       },
       async createOrganization() {
         if (!this.authSession?.user || this.organizationBusy) return;
@@ -276,6 +417,19 @@
       roleLabel(role) {
         return ({ owner: "Workspace owner", admin: "Committee admin", member: "Committee member", viewer: "Read-only viewer" })[role] || "Committee member";
       },
+      todayLabel() {
+        return new Intl.DateTimeFormat("en-IN", {
+          timeZone: this.currentOrganization?.timezone || "Asia/Kolkata",
+          weekday: "long", day: "numeric", month: "long", year: "numeric"
+        }).format(new Date()).toUpperCase();
+      },
+      greeting() {
+        const hour = Number(new Intl.DateTimeFormat("en-GB", {
+          timeZone: this.currentOrganization?.timezone || "Asia/Kolkata",
+          hour: "2-digit", hourCycle: "h23"
+        }).format(new Date()));
+        return hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
+      },
       get upcomingCount() { return this.meetings.filter(m => m.status === "Scheduled").length; },
       get openCount() { return this.actions.filter(a => a.status !== "Completed").length; },
       get overdueCount() { return this.actions.filter(a => a.status !== "Completed" && a.due < this.demoToday).length; },
@@ -320,6 +474,8 @@
           this.selectedMeeting.agenda.forEach(a => { if (typeof a.expanded !== "boolean") a.expanded = false; });
           this.go("detail");
           this.pageTitle = "Meeting details";
+        } else {
+          this.toast("This item belongs to the sample action-item data. Action-item persistence will be connected next.");
         }
       },
       scrollCarousel(direction) {
@@ -327,46 +483,149 @@
         if (el) el.scrollBy({ left: direction * Math.max(270, el.clientWidth * .72), behavior: "smooth" });
       },
       openCreate() {
+        if (!this.canManageMeetings) {
+          this.toast("Only committee admins can schedule meetings.");
+          return;
+        }
         this.editingMeetingId = null;
-        this.meetingForm = { title: "", date: "2026-10-30", time: "18:30", venue: "Society clubhouse", status: "Scheduled", attendees: "Alex Shah, Maya Patel, Ravi Desai", description: "" };
+        this.meetingForm = {
+          title: "", date: this.defaultMeetingDate(), time: "18:30",
+          venue: "Society clubhouse", status: "Scheduled", attendees: "", description: "", cancelReason: ""
+        };
         this.showMeetingModal = true;
       },
       editMeeting(id) {
-        const m = this.meetings.find(x=>x.id===id);
+        if (!this.canManageMeetings) {
+          this.toast("Only committee admins can edit meetings.");
+          return;
+        }
+        const m = this.meetings.find(x => x.id === id);
         if (!m) return;
-        this.editingMeetingId=id;
-        this.meetingForm={title:m.title,date:m.date,time:this.toTimeInput(m.time),venue:m.venue,status:m.status,attendees:m.attendees.join(", "),description:m.description||""};
-        this.showMeetingModal=true;
+        this.editingMeetingId = id;
+        this.meetingForm = {
+          title: m.title, date: m.date, time: this.toTimeInput(m.time), venue: m.venue,
+          status: m.status, attendees: m.attendees.join(", "), description: m.description || "",
+          cancelReason: m.cancelReason || ""
+        };
+        this.showMeetingModal = true;
+      },
+      defaultMeetingDate() {
+        const d = new Date();
+        d.setDate(d.getDate() + 7);
+        return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
       },
       toTimeInput(time) {
         const match = String(time).match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
         if (!match) return "18:30";
-        let h=Number(match[1])%12; if(match[3].toUpperCase()==="PM") h+=12;
-        return String(h).padStart(2,"0")+":"+match[2];
+        let h = Number(match[1]) % 12;
+        if (match[3].toUpperCase() === "PM") h += 12;
+        return String(h).padStart(2, "0") + ":" + match[2];
       },
       toDisplayTime(time) {
         if (!time) return "";
-        const [hh,mm]=time.split(":").map(Number); const suffix=hh>=12?"PM":"AM";
-        return (hh%12||12)+":"+String(mm).padStart(2,"0")+" "+suffix;
+        const [hh, mm] = time.split(":").map(Number);
+        const suffix = hh >= 12 ? "PM" : "AM";
+        return (hh % 12 || 12) + ":" + String(mm).padStart(2, "0") + " " + suffix;
       },
-      saveMeeting() {
-        const f=this.meetingForm;
-        if (!f.title.trim() || !f.date || !f.time || !f.venue.trim()) { this.toast("Please complete the required fields"); return; }
-        const common={title:f.title.trim(),date:f.date,time:this.toDisplayTime(f.time),venue:f.venue.trim(),status:f.status,attendees:f.attendees.split(",").map(x=>x.trim()).filter(Boolean),description:f.description.trim(),updated:"Oct 18, 2026"};
-        if (this.editingMeetingId) {
-          const m=this.meetings.find(x=>x.id===this.editingMeetingId);
-          if (m) Object.assign(m,common);
-          this.toast("Meeting details updated");
-        } else {
-          const id="mtg-"+String(Date.now()).slice(-6);
-          const m={id,...common,createdBy:"Alex Shah",agenda:[]};
-          this.meetings.push(m);
-          this.createReminders(m);
-          this.toast("Meeting scheduled in this demo");
-          this.sortMeetings();
+      async saveMeetingAttendees(meetingId, attendeeNames) {
+        const client = window.supabaseClient;
+        const orgId = this.currentOrganization?.id;
+        const { error: deleteError } = await client.from("meeting_attendees")
+          .delete().eq("organization_id", orgId).eq("meeting_id", meetingId);
+        if (deleteError) throw deleteError;
+        const rows = attendeeNames.map(name => ({
+          organization_id: orgId,
+          meeting_id: meetingId,
+          attendee_name: name
+        }));
+        if (rows.length) {
+          const { error: insertError } = await client.from("meeting_attendees").insert(rows);
+          if (insertError) throw insertError;
         }
-        this.showMeetingModal=false;
-        if(this.selectedMeeting) this.selectedMeeting=this.meetings.find(m=>m.id===this.selectedMeeting.id)||null;
+      },
+      async saveMeeting() {
+        const f = this.meetingForm;
+        if (!this.canManageMeetings) {
+          this.toast("Only committee admins can schedule or edit meetings.");
+          return;
+        }
+        if (!this.authSession?.user || !this.currentOrganization?.id) {
+          this.toast("Your committee session is not ready. Please sign in again.");
+          return;
+        }
+        if (!f.title.trim() || !f.date || !f.time || !f.venue.trim()) {
+          this.toast("Please complete the required fields");
+          return;
+        }
+        if (this.meetingSaveBusy) return;
+        const timezone = this.currentOrganization.timezone || "Asia/Kolkata";
+        let startsAt;
+        try {
+          startsAt = this.isoFromLocalDateTime(f.date, f.time, timezone);
+        } catch (err) {
+          this.toast("The meeting date/time is invalid for this workspace time zone.");
+          return;
+        }
+        const status = this.toDbMeetingStatus(f.status);
+        const payload = {
+          title: f.title.trim(),
+          description: (f.description || "").trim(),
+          meeting_type: "committee",
+          starts_at: startsAt,
+          timezone,
+          venue: f.venue.trim(),
+          status,
+          cancellation_reason: status === "cancelled" ? ((f.cancelReason || "").trim() || "Cancelled during scheduling.") : null,
+          updated_by: this.authUser.id
+        };
+        this.meetingSaveBusy = true;
+        let meetingId = this.editingMeetingId;
+        try {
+          const client = window.supabaseClient;
+          if (this.editingMeetingId) {
+            const { data, error } = await client.from("meetings")
+              .update(payload)
+              .eq("id", this.editingMeetingId)
+              .eq("organization_id", this.currentOrganization.id)
+              .select("id")
+              .maybeSingle();
+            if (error) throw error;
+            if (!data) throw new Error("The meeting was not updated. Check your role and organization access.");
+            meetingId = data.id;
+          } else {
+            const { data, error } = await client.from("meetings")
+              .insert({ ...payload, organization_id: this.currentOrganization.id })
+              .select("id")
+              .single();
+            if (error) throw error;
+            meetingId = data.id;
+          }
+
+          let attendeeWarning = "";
+          try {
+            const names = String(f.attendees || "").split(",").map(name => name.trim()).filter(Boolean);
+            await this.saveMeetingAttendees(meetingId, names);
+          } catch (attendeeError) {
+            attendeeWarning = " The meeting saved, but attendees could not be saved: " + (attendeeError.message || "permission or database error");
+          }
+
+          this.showMeetingModal = false;
+          this.editingMeetingId = null;
+          await this.loadMeetingsFromDatabase();
+          if (meetingId && !this.editingMeetingId) {
+            const savedMeeting = this.meetings.find(m => m.id === meetingId);
+            if (savedMeeting) {
+              this.selectedMeeting = savedMeeting;
+              this.go("detail");
+              this.pageTitle = "Meeting details";
+            }
+          }
+          this.toast((status === "scheduled" && !attendeeWarning ? "Meeting saved to PostgreSQL." : "Meeting saved.") + attendeeWarning);
+        } catch (err) {
+          this.toast("Could not save meeting: " + (err?.message || "Unknown database error"));
+        } finally {
+          this.meetingSaveBusy = false;
+        }
       },
       createReminders(m) {
         const [h,mins]=m.time.split(/[: ]/); let hour=Number(h)%12; if(m.time.includes("PM"))hour+=12;
@@ -405,27 +664,71 @@
         const agenda=this.selectedMeeting?.agenda.find(a=>a.id===id);
         if(agenda){this.selectedMeeting.updated="Oct 18, 2026";this.toast("Agenda notes saved for this demo");}
       },
-      completeMeeting(id) {
-        const m=this.meetings.find(x=>x.id===id);if(!m)return;
-        m.status="Completed";m.updated="Oct 18, 2026";
-        this.toast("Meeting marked completed. Open actions remain open.");
+      async persistMeetingStatus(id, status, cancellationReason = "") {
+        if (!this.canManageMeetings) {
+          this.toast("Only committee admins can change meeting status.");
+          return false;
+        }
+        const meeting = this.meetings.find(item => item.id === id);
+        if (!meeting || !this.currentOrganization?.id) return false;
+        const dbStatus = this.toDbMeetingStatus(status);
+        const payload = {
+          status: dbStatus,
+          cancellation_reason: dbStatus === "cancelled"
+            ? (String(cancellationReason || "").trim() || "Cancelled by committee.")
+            : null,
+          updated_by: this.authUser.id
+        };
+        try {
+          const { data, error } = await window.supabaseClient.from("meetings")
+            .update(payload)
+            .eq("id", id)
+            .eq("organization_id", this.currentOrganization.id)
+            .select("id, status")
+            .maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error("The meeting status was not updated. Check your role and organization access.");
+          await this.loadMeetingsFromDatabase();
+          this.selectedMeeting = this.meetings.find(item => item.id === id) || null;
+          this.toast(status === "Completed"
+            ? "Meeting marked completed. Open actions remain open."
+            : status === "Cancelled"
+              ? "Meeting cancelled; record retained."
+              : "Meeting status updated.");
+          return true;
+        } catch (err) {
+          this.toast("Could not update meeting status: " + (err?.message || "Database error"));
+          return false;
+        }
       },
-      setMeetingStatus(id,status) {
-        const m=this.meetings.find(x=>x.id===id);if(!m)return;
-        if(status==="Cancelled"){this.cancelMeeting(id);return;}
-        m.status=status;if(status==="Scheduled")m.cancelReason="";
-        m.updated="Oct 18, 2026";this.toast("Meeting status updated");
+      async completeMeeting(id) {
+        return await this.persistMeetingStatus(id, "Completed");
+      },
+      async setMeetingStatus(id, status) {
+        if (status === "Cancelled") {
+          this.cancelMeeting(id);
+          return;
+        }
+        return await this.persistMeetingStatus(id, status);
       },
       cancelMeeting(id) {
-        this.cancelTargetId=id;
-        const m=this.meetings.find(x=>x.id===id);
-        this.cancelReason=m?.cancelReason||"";
-        this.showCancelModal=true;
+        if (!this.canManageMeetings) {
+          this.toast("Only committee admins can cancel meetings.");
+          return;
+        }
+        this.cancelTargetId = id;
+        const meeting = this.meetings.find(item => item.id === id);
+        this.cancelReason = meeting?.cancelReason || "";
+        this.showCancelModal = true;
       },
-      confirmCancel() {
-        const m=this.meetings.find(x=>x.id===this.cancelTargetId);
-        if(m){m.status="Cancelled";m.cancelReason=this.cancelReason.trim()||"Cancelled by committee.";m.updated="Oct 18, 2026";this.reminders.filter(r=>r.meetingId===m.id&&!r.sent).forEach(r=>r.cancelled=true);this.toast("Meeting cancelled; record retained.");}
-        this.showCancelModal=false;
+      async confirmCancel() {
+        if (!this.cancelTargetId) return;
+        const reason = this.cancelReason.trim() || "Cancelled by committee.";
+        const saved = await this.persistMeetingStatus(this.cancelTargetId, "Cancelled", reason);
+        if (saved) {
+          this.showCancelModal = false;
+          this.cancelTargetId = null;
+        }
       },
       completeAction(id) { this.toggleAction(id); },
       toggleAction(id) {
