@@ -15,12 +15,17 @@ PostgreSQL-connected scope:
 - Final minutes are locked from ordinary editing; an administrator can reopen them for corrections.
 - Schedule, agenda, and minutes screens read records from the active organization's database.
 
+PostgreSQL-connected follow-up tracking:
+- Action records are loaded from public.action_items, including description, assignee membership, due date, priority, and status.
+- The tracker supports creation, editing, and persisted status changes under Supabase Row Level Security.
+- Each action retains its original meeting and agenda references.
+- Carry-forward records use public.action_item_links so an action can be revisited at a later meeting without changing its origin.
+- Assignment choices are based on active committee memberships.
+
 Still demo-only:
-- Open action items and action links/carry-forward still use sample data in browser memory.
 - Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
-- Sample action items and reminders do not correspond to the current PostgreSQL schedule.
 
 Before production:
-- Connect action items and action links to PostgreSQL; verify RLS with owner, admin, member, viewer, and cross-organization accounts.
+- Test action creation, assignment, updates, status transitions, carry-forward links, and link removal with owner, admin, member, viewer, and cross-organization accounts.
 - Add invitation/role-management workflows and test RLS with owner, admin, member, and cross-organization accounts.
 - Configure a scheduled notification worker before enabling real external notifications.

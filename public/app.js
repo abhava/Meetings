@@ -13,6 +13,7 @@
       organizationBusy: false, authSubscription: null,
       meetingsLoading: false, meetingsLoaded: false, meetingsError: "", meetingSaveBusy: false,
       agendaSaveBusy: false, agendaNoteSaveBusy: false, minutesSaveBusy: false,
+      tasksLoading: false,
       page: "dashboard", pageTitle: "Dashboard", mobileNav: false,
       demoToday: today, selectedMeeting: null,
       meetingSearch: "", meetingFilter: "All", meetingYear: "All",
