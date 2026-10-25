@@ -56,6 +56,27 @@
 @keyframes authSpin{to{transform:rotate(360deg)}}
 .auth-error-icon{height:32px;width:32px;display:grid;place-items:center;border-radius:50%;background:#fae9e6;color:#a54c43;margin:0 auto 12px;font-weight:800}
 .org-select{max-width:180px;border:1px solid #e1e8e2;border-radius:8px;padding:7px 24px 7px 9px;background:#fff;color:#526157;font-size:10px}
+/* Invitation-only access administration */
+.invitation-create-panel,.invitation-list-panel{padding:20px;margin-bottom:18px}
+.invitation-form{display:grid;grid-template-columns:minmax(220px,1.2fr) minmax(220px,1fr) auto;gap:14px;align-items:end;margin-top:16px}
+.invitation-form .form-field{margin-bottom:0}
+.invitation-form input,.invitation-form select,.invitation-link-row input{width:100%;min-height:39px;border:1px solid #dfe7df;border-radius:8px;padding:9px 11px;font-size:11px;color:#304237;background:#fbfcfa}
+.invitation-form .btn{min-height:39px;white-space:nowrap}
+.invitation-link-panel{margin-top:16px;padding:14px;border:1px solid #dce9d7;background:#f5faf2;border-radius:9px}
+.invitation-link-panel>strong{font-size:11px;color:#476d4a}
+.invitation-link-panel p{font-size:10px;line-height:1.6;color:#748b74;margin:6px 0 12px}
+.invitation-link-row{display:flex;gap:8px;align-items:center}
+.invitation-link-row input{min-width:0;background:#fff}
+.invitation-table{overflow-x:auto}
+.invitation-member-head{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(150px,1fr) minmax(100px,.7fr);gap:14px;align-items:center;min-width:520px}
+.invitation-history-head{display:grid;grid-template-columns:minmax(180px,1.5fr) minmax(100px,.7fr) minmax(120px,.8fr) minmax(70px,.5fr);gap:14px;align-items:center;min-width:630px}
+.invitation-table-row{padding:12px 14px;border-bottom:1px solid #edf1ed;font-size:10px}
+.invitation-person strong,.invitation-person small{display:block;overflow-wrap:anywhere}
+.invitation-person strong{font-size:10px;color:#3f5145}
+.invitation-person small{font-size:9px;color:#96a199;margin-top:4px}
+.invitation-history-head .text-action{white-space:nowrap}
+.invitation-list-panel .table-head{margin:0}
+@media(max-width:760px){.invitation-create-panel,.invitation-list-panel{padding:14px}.invitation-form{grid-template-columns:1fr;gap:11px}.invitation-form .btn{width:100%}.invitation-link-row{align-items:stretch;flex-direction:column}.invitation-link-row .btn{width:100%}}
 /* Persisted agenda and meeting-minutes presentation */
 .agenda-item-description{font-size:10px;color:#89968e;line-height:1.55;margin:5px 0 0}.minutes-summary-panel{margin-top:14px;padding:18px}
 .minutes-summary-panel .form-field textarea{min-height:120px;font-size:11px;line-height:1.65}

@@ -43,7 +43,7 @@
         if (!meetingId) return [];
         return this.actions.flatMap(item => item.links
           .filter(link => link.meetingId === meetingId)
-          .map(link => ({ ...link, actionId: item.id, actionTitle: item.title, actionStatus: item.status, originTitle: item.meetingTitle })));
+          .map(link => ({ ...link, linked_by: link.linkedBy, actionId: item.id, actionTitle: item.title, actionStatus: item.status, originTitle: item.meetingTitle })));
       }
     });
     Object.defineProperty(state, "openCount", {

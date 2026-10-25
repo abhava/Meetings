@@ -25,7 +25,17 @@ PostgreSQL-connected follow-up tracking:
 Still demo-only:
 - Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
 
-Before production:
-- Test action creation, assignment, updates, status transitions, carry-forward links, and link removal with owner, admin, member, viewer, and cross-organization accounts.
-- Add invitation/role-management workflows and test RLS with owner, admin, member, and cross-organization accounts.
-- Configure a scheduled notification worker before enabling real external notifications.
+Invitation-only member onboarding (draft implementation):
+- Workspace self-creation from the signed-in no-membership screen is disabled in the app.
+- Owner/admin UI is available under Members & invitations. Owners can invite member/admin/owner; admins can invite regular members only. Role checks are enforced again in database functions.
+- The admin creates an invitation for a normalized email address. The app displays a private invitation URL containing a high-entropy token. The token is stored as a SHA-256 hash in the database; pending invitations expire after 7 days and can be revoked.
+- The invited person opens the link, enters the exact invited email, receives a Supabase magic link, signs in and explicitly accepts. A verified email and valid pending token are required before membership is created/activated.
+- Without active membership, the app must display “No committee access yet” and no workspace data is loaded.
+- SQL source is held in lib/supabase-invitation-migration.sql. It is for the external Supabase project only; do not run it as a Hatchable migration or serve it as a public static file.
+- Before release, apply and review that SQL in Supabase, verify the exact column names and existing RLS policies, configure Supabase Auth redirect URLs for the production/draft site, and ensure no service-role key is placed in frontend files.
+- Verify owner/admin/member/uninvited/unauthenticated behavior, cross-organization isolation, invitation expiry/revocation/reuse, email mismatch, role escalation prevention, and ownership transfer before using the feature for real members.
+
+Still demo-only:
+- Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
+- Owner/admin invitation creation requests a Supabase Auth magic-link email with the one-time invitation token in the redirect. If Supabase reports an email-send error, the UI exposes a copyable fallback link.
+- Confirm the Supabase email template and SMTP sender deliver the expected redirect link; a successful API response must still be followed by an end-to-end inbox test.

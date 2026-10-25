@@ -11,21 +11,28 @@
       selectedMembershipId: "", loginEmail: "", loginBusy: false,
       authError: "", authMessage: "", organizationName: "", organizationSlug: "",
       organizationBusy: false, authSubscription: null,
+      invitationToken: new URLSearchParams(window.location.search).get("invite") || "",
+      invitationDetails: null, invitationLookupBusy: false, inviteAcceptBusy: false,
+      inviteEmail: "", inviteRole: "member", inviteBusy: false, inviteRevokeBusy: false,
+      invitationError: "", invitationMessage: "", invitationLink: "",
+      invitationRows: [], organizationMembers: [], membersLoading: false, rosterError: "",
       meetingsLoading: false, meetingsLoaded: false, meetingsError: "", meetingSaveBusy: false,
       agendaSaveBusy: false, agendaNoteSaveBusy: false, minutesSaveBusy: false,
-      tasksLoading: false,
+      tasksLoading: false, tasksLoaded: false, tasksError: "",
+      taskSaveBusy: false, taskStatusBusy: false, carrySaveBusy: false,
+      activeMembers: [], workItemMembers: {}, workItemLinks: [],
       page: "dashboard", pageTitle: "Dashboard", mobileNav: false,
       demoToday: today, selectedMeeting: null,
       meetingSearch: "", meetingFilter: "All", meetingYear: "All",
       actionSearch: "", actionFilter: "Open items", ownerFilter: "All",
       minutesSearch: "", minutesYear: "All", reminderFilter: "All",
       showMeetingModal: false, showAgendaModal: false, showActionModal: false, showCancelModal: false,
-      editingMeetingId: null, editingAgendaId: null, editingActionId: null, cancelTargetId: null, cancelReason: "", carryActionId: "act-001", carryAgendaId: "",
+      editingMeetingId: null, editingAgendaId: null, editingActionId: null, cancelTargetId: null, cancelReason: "", carryActionId: "", carryAgendaId: "",
       toastMessage: "", toastTimer: null,
       settings: { dayBefore: true, hourBefore: true, after: false },
       meetingForm: { title: "", date: "2026-10-30", time: "18:30", venue: "Society clubhouse", status: "Scheduled", attendees: "Alex Shah, Maya Patel, Ravi Desai", description: "" },
       agendaForm: { title: "", category: "Discussion" },
-      actionForm: { title: "", owner: "", due: "2026-10-30", meetingId: "mtg-004", agendaId: "", status: "Open" },
+      actionForm: { title: "", description: "", assigneeMembershipId: "", due: "", meetingId: "", agendaId: "", priority: "Normal", status: "Open" },
       sampleMeetings: [
         { id: "mtg-001", title: "Monthly Committee Meeting", date: "2026-10-23", time: "6:30 PM", venue: "Clubhouse · Meeting Room", status: "Scheduled", description: "Review the committee's current priorities, confirm vendor follow-ups, and agree on the next set of community improvements.", createdBy: "Alex Shah", updated: "Oct 17, 2026", attendees: ["Alex Shah", "Maya Patel", "Ravi Desai", "Neha Kulkarni", "Karan Mehta"], agenda: [
           mkAgenda("ag-001", "Review previous meeting action items", "Follow-up", "Three items remain open from the last committee discussion. The water audit is in progress; the housekeeping quotations are pending.", "Carry forward all unfinished work with a named owner and due date.", true),
@@ -67,7 +74,7 @@
         ] }
       ],
       meetings: [],
-      actions: [
+      sampleActions: [
         { id: "act-001", title: "Complete building-wise leakage survey", owner: "Vaibhav Joshi", due: "2026-10-20", status: "In Progress", meetingId: "mtg-005", meetingTitle: "September Committee Review", agendaId: "ag-014", agendaTitle: "Review water supply issues" },
         { id: "act-002", title: "Collect two housekeeping quotations", owner: "Neha Kulkarni", due: "2026-10-21", status: "Open", meetingId: "mtg-005", meetingTitle: "September Committee Review", agendaId: "ag-015", agendaTitle: "Review housekeeping service" },
         { id: "act-003", title: "Update parking policy draft", owner: "Maya Patel", due: "2026-10-25", status: "Open", meetingId: "mtg-005", meetingTitle: "September Committee Review", agendaId: "ag-016", agendaTitle: "Parking policy feedback" },
@@ -76,6 +83,7 @@
         { id: "act-006", title: "Share clubhouse improvement options", owner: "Alex Shah", due: "2026-10-24", status: "Completed", meetingId: "mtg-008", meetingTitle: "Common Area Project Check-in", agendaId: "ag-022", agendaTitle: "Assign initial research tasks" },
         { id: "act-007", title: "Confirm meter replacement schedule", owner: "Umesh Patil", due: "2026-10-30", status: "In Progress", meetingId: "mtg-001", meetingTitle: "Monthly Committee Meeting", agendaId: "ag-002", agendaTitle: "Water supply and leakage update" }
       ],
+      actions: [],
       reminders: [
         { id: "rem-001", meetingId: "mtg-001", title: "Monthly Committee Meeting", date: "2026-10-22", time: "6:30 PM", meetingTime: "6:30 PM", offset: "24 hours before", channel: "In-app demo", sent: false, cancelled: false },
         { id: "rem-002", meetingId: "mtg-001", title: "Monthly Committee Meeting", date: "2026-10-23", time: "5:30 PM", meetingTime: "6:30 PM", offset: "1 hour before", channel: "In-app demo", sent: false, cancelled: false },
@@ -94,6 +102,7 @@
           this.authError = "Supabase could not initialize. Refresh the page or check the project configuration.";
           return;
         }
+        if (this.invitationToken) await this.loadInvitationDetails();
         const app = this;
         const listener = client.auth.onAuthStateChange((event, session) => {
           if (event === "SIGNED_OUT") {
@@ -126,18 +135,31 @@
       async sendMagicLink() {
         const email = String(this.loginEmail || "").trim().toLowerCase();
         if (!email) {
-          this.authError = "Enter your registered email address.";
+          this.authError = "Enter your email address.";
           return;
         }
         this.loginBusy = true;
         this.authError = "";
         this.authMessage = "";
         try {
+          let shouldCreateUser = false;
+          if (this.invitationToken) {
+            await this.loadInvitationDetails();
+            if (!this.invitationDetails?.valid) throw new Error("This invitation is invalid or expired. Ask your committee owner/admin for a new link.");
+            if (email !== String(this.invitationDetails.email || "").trim().toLowerCase()) {
+              throw new Error("Use the exact email address to which this invitation was issued.");
+            }
+            // Only an invitation bearer with a valid, unexpired token may trigger
+            // first-time Auth account creation from this UI.
+            shouldCreateUser = true;
+          }
+          const redirectUrl = new URL("/", window.location.origin);
+          if (this.invitationToken) redirectUrl.searchParams.set("invite", this.invitationToken);
           const { error } = await window.supabaseClient.auth.signInWithOtp({
             email,
             options: {
-              emailRedirectTo: window.location.origin + "/",
-              shouldCreateUser: false
+              emailRedirectTo: redirectUrl.toString(),
+              shouldCreateUser
             }
           });
           if (error) {
@@ -188,6 +210,7 @@
             this.organizationName = "";
             this.organizationSlug = "";
             this.authState = "noMembership";
+            if (this.invitationToken) await this.loadInvitationDetails();
             return;
           }
           const organizationIds = [...new Set(rows.map(row => row.organization_id))];
@@ -213,18 +236,70 @@
         this.currentMembership = membership;
         this.currentOrganization = membership.organization;
         if (organizationChanged) {
+          this.invitationRows = [];
+          this.organizationMembers = [];
+          this.invitationLink = "";
+          this.invitationMessage = "";
           this.meetings = [];
+          this.actions = [];
+          this.activeMembers = [];
           this.selectedMeeting = null;
           this.meetingsLoaded = false;
           this.meetingsError = "";
-          this.loadMeetingsFromDatabase();
+          this.tasksLoaded = false;
+          this.tasksError = "";
+          this.loadWorkspaceData();
         }
+      },
+      async loadWorkspaceData() {
+        await this.loadMeetingsFromDatabase();
       },
       get canManageMeetings() {
         return ["owner", "admin"].includes(this.currentMembership?.role);
       },
       get canRecordMinutes() {
         return ["owner", "admin", "member"].includes(this.currentMembership?.role);
+      },
+      get canContributeActions() {
+        return ["owner", "admin", "member"].includes(this.currentMembership?.role);
+      },
+      get canManageActions() {
+        return ["owner", "admin"].includes(this.currentMembership?.role);
+      },
+      get canManageInvitations() {
+        return ["owner", "admin"].includes(this.currentMembership?.role);
+      },
+      get invitationMatchesSignedInUser() {
+        return !!(this.invitationDetails?.valid && this.authUser?.email &&
+          String(this.authUser.email).trim().toLowerCase() === String(this.invitationDetails.email || "").trim().toLowerCase());
+      },
+      get noMembershipMessage() {
+        if (this.invitationLookupBusy) return "Checking the invitation and confirming that it belongs to your email address…";
+        if (this.invitationDetails?.valid && this.invitationMatchesSignedInUser) {
+          return "You're signed in as " + this.authUser.email + ". Accept the invitation below to activate your preassigned role in " + (this.invitationDetails.organization_name || "the committee workspace") + ".";
+        }
+        if (this.invitationDetails?.valid && !this.invitationMatchesSignedInUser) {
+          return "This invitation is for " + this.invitationDetails.email + ". Sign out and request a magic link using that exact email address.";
+        }
+        return "You're signed in as " + (this.authUser?.email || "this account") + ", but have no active committee membership. Knowing the app URL or signing in does not grant access. Contact your committee owner/admin for an invitation link.";
+      },
+      canEditAction(action) {
+        if (!action || !this.canContributeActions) return false;
+        return this.canManageActions ||
+          action.createdById === this.authUser?.id ||
+          action.assigneeMembershipId === this.currentMembership?.id;
+      },
+      toUiActionStatus(status) {
+        return ({ open: "Open", in_progress: "In Progress", completed: "Completed", cancelled: "Cancelled" })[String(status || "").toLowerCase()] || "Open";
+      },
+      toDbActionStatus(status) {
+        return ({ "Open": "open", "In Progress": "in_progress", "Completed": "completed", "Cancelled": "cancelled" })[status] || "open";
+      },
+      toUiPriority(priority) {
+        return ({ low: "Low", normal: "Normal", high: "High", urgent: "Urgent" })[String(priority || "").toLowerCase()] || "Normal";
+      },
+      toDbPriority(priority) {
+        return ({ "Low": "low", "Normal": "normal", "High": "high", "Urgent": "urgent" })[priority] || "normal";
       },
       async loadMeetingsFromDatabase() {
         const orgId = this.currentOrganization?.id;
@@ -330,6 +405,69 @@
           this.meetingsLoading = false;
         }
       },
+      async loadWorkItemsFromDatabase() {
+        const orgId = this.currentOrganization?.id;
+        const client = window.supabaseClient;
+        if (!orgId || !client) return;
+        this.tasksLoading = true;
+        this.tasksError = "";
+        try {
+          const { data, error } = await client.from("action_items")
+            .select("id, organization_id, source_meeting_id, source_agenda_item_id, title, description, assignee_membership_id, due_date, priority, status, resolution_note, completed_at, cancelled_at, created_by, updated_by, created_at, updated_at")
+            .eq("organization_id", orgId).order("created_at", { ascending: false });
+          if (error) throw error;
+          await this.loadActionMembers(orgId);
+          await this.loadActionLinks(orgId);
+          this.actions = (data || []).map(row => ({
+            id: row.id, organizationId: row.organization_id, title: row.title,
+            description: row.description || "", owner: (this.activeMembers.find(m => m.id === row.assignee_membership_id) || {}).name || "Unassigned",
+            assigneeMembershipId: row.assignee_membership_id || "", due: row.due_date || "",
+            priority: this.toUiPriority(row.priority), status: this.toUiActionStatus(row.status),
+            resolutionNote: row.resolution_note || "", completedAt: row.completed_at,
+            cancelledAt: row.cancelled_at, createdById: row.created_by || "",
+            updatedById: row.updated_by || "", createdAt: row.created_at, updatedAt: row.updated_at,
+            meetingId: row.source_meeting_id,
+            meetingTitle: this.meetings.find(m => m.id === row.source_meeting_id)?.title || "Source meeting",
+            agendaId: row.source_agenda_item_id || "",
+            agendaTitle: this.meetings.flatMap(m => m.agenda || []).find(a => a.id === row.source_agenda_item_id)?.title || "General follow-up",
+            links: this.workItemLinks.filter(link => link.action_item_id === row.id),
+            linkedMeetingId: "", linkedMeetingTitle: "", linkedAgendaId: "", linkedAgendaTitle: ""
+          }));
+          this.tasksLoaded = true;
+        } catch (err) {
+          this.actions = [];
+          this.tasksError = err?.message || "Could not load action items.";
+          this.tasksLoaded = false;
+        } finally { this.tasksLoading = false; }
+      },
+      async loadActionLinks(orgId) {
+        const { data, error } = await window.supabaseClient.from("action_item_links").select("id, action_item_id, meeting_id, agenda_item_id, linked_by").eq("organization_id", orgId);
+        if (error) throw error;
+        this.workItemLinks = data || [];
+      },
+      async loadActionMembers(orgId) {
+        const client = window.supabaseClient;
+        const { data, error } = await client.from("organization_memberships")
+          .select("id, user_id, invited_email, committee_title, role, status")
+          .eq("organization_id", orgId).eq("status", "active");
+        if (error) throw error;
+        const rows = data || [];
+        const ids = [...new Set(rows.map(row => row.user_id).filter(Boolean))];
+        let profiles = [];
+        if (ids.length) {
+          const result = await client.from("profiles").select("id, full_name, email").in("id", ids);
+          if (result.error) throw result.error;
+          profiles = result.data || [];
+        }
+        const profileById = Object.fromEntries(profiles.map(row => [row.id, row]));
+        this.activeMembers = rows.map(row => ({
+          id: row.id, userId: row.user_id,
+          name: profileById[row.user_id]?.full_name || profileById[row.user_id]?.email || row.invited_email || "Committee member",
+          email: profileById[row.user_id]?.email || row.invited_email || "",
+          committeeTitle: row.committee_title || "", role: row.role
+        }));
+        this.workItemMembers = Object.fromEntries(this.activeMembers.map(member => [member.id, member]));
+      },
       toUiMeetingStatus(status) {
         return ({ scheduled: "Scheduled", completed: "Completed", cancelled: "Cancelled" })[String(status || "").toLowerCase()] || "Scheduled";
       },
@@ -369,31 +507,205 @@
         }
         return new Date(candidate).toISOString();
       },
-      async createOrganization() {
-        if (!this.authSession?.user || this.organizationBusy) return;
-        const name = String(this.organizationName || "").trim();
-        const slug = this.slugify(this.organizationSlug || name);
-        if (!name || !slug) {
-          this.authError = "Enter a committee name and a valid workspace slug.";
+      async loadInvitationDetails() {
+        if (!this.invitationToken || !window.supabaseClient) {
+          this.invitationDetails = null;
           return;
         }
-        this.organizationBusy = true;
-        this.authError = "";
+        this.invitationLookupBusy = true;
         try {
-          const { data, error } = await window.supabaseClient.rpc("create_organization", {
-            p_name: name,
-            p_slug: slug,
-            p_timezone: "Asia/Kolkata"
+          const { data, error } = await window.supabaseClient.rpc("validate_organization_invitation", {
+            p_token: this.invitationToken
           });
           if (error) throw error;
-          if (!data) throw new Error("The workspace function did not return an organization ID.");
-          await this.loadUserContext(this.authSession, true);
-          if (this.authState === "ready") this.toast("Workspace created successfully.");
+          this.invitationDetails = data && typeof data === "object" ? data : { valid: false };
+          if (this.invitationDetails.valid && this.invitationDetails.expires_at &&
+              new Date(this.invitationDetails.expires_at).getTime() <= Date.now()) {
+            this.invitationDetails = { valid: false };
+          }
+          if (this.invitationDetails.valid && !this.loginEmail) {
+            this.loginEmail = String(this.invitationDetails.email || "").trim().toLowerCase();
+          }
         } catch (err) {
-          this.authError = err?.message || "Could not create the workspace.";
+          this.invitationDetails = { valid: false };
+          console.warn("Invitation validation was unavailable:", err?.message || err);
         } finally {
-          this.organizationBusy = false;
+          this.invitationLookupBusy = false;
         }
+      },
+      async acceptInvitation() {
+        if (this.inviteAcceptBusy) return;
+        if (!this.invitationToken || !this.invitationDetails?.valid || !this.invitationMatchesSignedInUser) {
+          this.authError = "The invitation is invalid or does not match your verified email address.";
+          return;
+        }
+        this.inviteAcceptBusy = true;
+        this.authError = "";
+        try {
+          const { data, error } = await window.supabaseClient.rpc("accept_organization_invitation", {
+            p_token: this.invitationToken
+          });
+          if (error) throw error;
+          if (!data) throw new Error("The invitation could not activate a committee membership.");
+          this.invitationToken = "";
+          this.invitationDetails = null;
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("invite");
+          window.history.replaceState(null, "", cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+          await this.loadUserContext(this.authSession, true);
+          if (this.authState === "ready") this.toast("Committee invitation accepted. Your membership is active.");
+        } catch (err) {
+          this.authError = err?.message || "Could not accept this invitation.";
+        } finally {
+          this.inviteAcceptBusy = false;
+        }
+      },
+      async loadInvitationRoster() {
+        if (!this.canManageInvitations || !this.currentOrganization?.id || this.membersLoading) return;
+        this.membersLoading = true;
+        this.rosterError = "";
+        this.invitationError = "";
+        try {
+          const orgId = this.currentOrganization.id;
+          const [invitesResult, membersResult] = await Promise.all([
+            window.supabaseClient.rpc("list_organization_invitations", { p_organization_id: orgId }),
+            window.supabaseClient.from("organization_memberships")
+              .select("id, user_id, invited_email, committee_title, role, status, created_at")
+              .eq("organization_id", orgId).eq("status", "active")
+              .order("created_at", { ascending: true })
+          ]);
+          if (invitesResult.error) throw new Error("Invitation backend is not ready: " + invitesResult.error.message);
+          if (membersResult.error) throw new Error("Could not load active members: " + membersResult.error.message);
+          const rows = membersResult.data || [];
+          const userIds = [...new Set(rows.map(row => row.user_id).filter(Boolean))];
+          let profileRows = [];
+          if (userIds.length) {
+            const profilesResult = await window.supabaseClient.from("profiles")
+              .select("id, full_name, email").in("id", userIds);
+            if (profilesResult.error) throw new Error("Could not load member profiles: " + profilesResult.error.message);
+            profileRows = profilesResult.data || [];
+          }
+          const profilesByUserId = Object.fromEntries(profileRows.map(row => [row.id, row]));
+          this.organizationMembers = rows.map(row => {
+            const profile = profilesByUserId[row.user_id] || {};
+            const email = profile.email || row.invited_email || "";
+            return {
+              id: row.id, userId: row.user_id, email,
+              name: String(profile.full_name || row.committee_title || email || "Committee member").trim(),
+              role: row.role, status: row.status
+            };
+          }).sort((a,b) => ({owner:0,admin:1,member:2,viewer:3}[a.role] ?? 4) - ({owner:0,admin:1,member:2,viewer:3}[b.role] ?? 4) || a.name.localeCompare(b.name));
+          this.invitationRows = Array.isArray(invitesResult.data) ? invitesResult.data : [];
+        } catch (err) {
+          this.rosterError = err?.message || "Could not load the access roster.";
+        } finally {
+          this.membersLoading = false;
+        }
+      },
+      async createInvitation() {
+        if (!this.canManageInvitations || !this.currentOrganization?.id || this.inviteBusy) {
+          this.invitationError = "Only an active owner or admin can create invitations.";
+          return;
+        }
+        const email = String(this.inviteEmail || "").trim().toLowerCase();
+        const role = String(this.inviteRole || "member");
+        if (!email || !email.includes("@")) {
+          this.invitationError = "Enter a valid email address.";
+          return;
+        }
+        if (!["owner","admin","member"].includes(role) ||
+            (this.currentMembership.role === "admin" && role !== "member")) {
+          this.invitationError = "Your role is not allowed to assign that membership role.";
+          return;
+        }
+        this.inviteBusy = true;
+        this.invitationError = "";
+        this.invitationMessage = "";
+        this.invitationLink = "";
+        try {
+          const { data, error } = await window.supabaseClient.rpc("create_organization_invitation", {
+            p_organization_id: this.currentOrganization.id,
+            p_email: email,
+            p_role: role
+          });
+          if (error) throw error;
+          if (!data?.token) throw new Error("The invitation service did not return a secure invitation token.");
+          const link = new URL("/", window.location.origin);
+          link.searchParams.set("invite", data.token);
+          const { error: emailError } = await window.supabaseClient.auth.signInWithOtp({
+            email,
+            options: {
+              emailRedirectTo: link.toString(),
+              shouldCreateUser: true
+            }
+          });
+          this.inviteEmail = "";
+          this.inviteRole = "member";
+          if (emailError) {
+            // The DB invitation is already pending. Expose its token only as a
+            // one-time manual fallback when Supabase cannot send the magic link.
+            this.invitationLink = link.toString();
+            this.invitationError = "The invitation was saved, but Supabase could not send the magic-link email: " + emailError.message + ". Copy the fallback link below and send it privately to the invited address.";
+            this.invitationMessage = "Invitation saved for " + email + "; email delivery needs attention.";
+          } else {
+            this.invitationLink = "";
+            this.invitationMessage = "Supabase accepted the magic-link email request for " + email + ". After signing in, the invitee must accept this invitation before committee access is activated.";
+          }
+          await this.loadInvitationRoster();
+        } catch (err) {
+          this.invitationError = err?.message || "Could not create this invitation.";
+        } finally {
+          this.inviteBusy = false;
+        }
+      },
+      async revokeInvitation(invitationId) {
+        if (!this.canManageInvitations || this.inviteRevokeBusy) return;
+        const inv = this.invitationRows.find(row => row.id === invitationId);
+        if (!inv || inv.status !== "pending") return;
+        if (!window.confirm("Revoke the pending invitation for " + inv.email + "? The link will stop working.")) return;
+        this.inviteRevokeBusy = true;
+        this.invitationError = "";
+        try {
+          const { data, error } = await window.supabaseClient.rpc("revoke_organization_invitation", {
+            p_invitation_id: invitationId
+          });
+          if (error) throw error;
+          if (!data) throw new Error("This invitation is no longer pending.");
+          this.invitationMessage = "Invitation revoked. Its link can no longer be accepted.";
+          await this.loadInvitationRoster();
+        } catch (err) {
+          this.invitationError = err?.message || "Could not revoke this invitation.";
+        } finally {
+          this.inviteRevokeBusy = false;
+        }
+      },
+      async copyInvitationLink() {
+        if (!this.invitationLink) return;
+        try {
+          await navigator.clipboard.writeText(this.invitationLink);
+          this.toast("Private invitation link copied.");
+        } catch (err) {
+          const field = document.querySelector(".invitation-link-row input");
+          if (field) { field.focus(); field.select(); }
+          this.toast("Select the invitation link and copy it manually.");
+        }
+      },
+      formatInvitationDate(value) {
+        if (!value) return "—";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("en-IN", {
+          day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
+        });
+      },
+      async createOrganization() {
+        this.authError = "Self-service workspace creation is disabled. Ask an existing committee owner/admin for an invitation.";
+        this.authState = "noMembership";
+        return;
+      },
+      async legacyCreateOrganizationDisabled() {
+        this.authError = "Self-service workspace creation is disabled. Ask an existing committee owner/admin for an invitation.";
+        this.authState = "noMembership";
+        return;
       },
       async retryAuth() {
         this.authError = "";
@@ -428,6 +740,13 @@
         this.currentMembership = null;
         this.currentOrganization = null;
         this.selectedMembershipId = "";
+        this.invitationRows = [];
+        this.organizationMembers = [];
+        this.membersLoading = false;
+        this.rosterError = "";
+        this.invitationError = "";
+        this.invitationMessage = "";
+        this.invitationLink = "";
         this.showMeetingModal = false;
         this.showAgendaModal = false;
         this.showActionModal = false;
@@ -453,8 +772,8 @@
         return hour < 12 ? "Good morning," : hour < 17 ? "Good afternoon," : "Good evening,";
       },
       get upcomingCount() { return this.meetings.filter(m => m.status === "Scheduled").length; },
-      get openCount() { return this.actions.filter(a => a.status !== "Completed").length; },
-      get overdueCount() { return this.actions.filter(a => a.status !== "Completed" && a.due < this.demoToday).length; },
+      get openCount() { return this.actions.filter(a => !["Completed", "Cancelled"].includes(a.status)).length; },
+      get overdueCount() { return this.actions.filter(a => !["Completed", "Cancelled"].includes(a.status) && a.due && a.due < this.demoToday).length; },
       get owners() { return [...new Set(this.actions.map(a => a.owner))].sort(); },
       get carouselMeetings() {
         const upcoming = this.meetings.filter(m => m.status === "Scheduled").sort((a,b) => a.date.localeCompare(b.date));
@@ -468,14 +787,26 @@
       get filteredActions() {
         const q = this.actionSearch.toLowerCase().trim();
         return this.actions.filter(a => {
-          const statusOk = this.actionFilter === "All" || (this.actionFilter === "Open items" ? a.status !== "Completed" : a.status === this.actionFilter);
-          return statusOk && (this.ownerFilter === "All" || a.owner === this.ownerFilter) && (!q || [a.title,a.owner,a.meetingTitle,a.agendaTitle,a.status].join(" ").toLowerCase().includes(q));
+          const statusOk = this.actionFilter === "All" ||
+            (this.actionFilter === "Open items" ? !["Completed", "Cancelled"].includes(a.status) : a.status === this.actionFilter);
+          return statusOk && (this.ownerFilter === "All" || a.owner === this.ownerFilter) &&
+            (!q || [a.title, a.description, a.owner, a.meetingTitle, a.agendaTitle, a.status, a.priority].join(" ").toLowerCase().includes(q));
         }).sort((a,b) => {
-          if (a.status === "Completed" && b.status !== "Completed") return 1;
-          if (a.status !== "Completed" && b.status === "Completed") return -1;
+          const aDone = ["Completed", "Cancelled"].includes(a.status);
+          const bDone = ["Completed", "Cancelled"].includes(b.status);
+          if (aDone && !bDone) return 1;
+          if (!aDone && bDone) return -1;
+          if (!a.due) return 1;
+          if (!b.due) return -1;
           return a.due.localeCompare(b.due);
         });
       },
+      get carryForwardActions() {
+        const meeting = this.selectedMeeting;
+        if (!meeting) return [];
+        return this.actions.filter(a => ["Open", "In Progress"].includes(a.status) && a.meetingId !== meeting.id && !this.workItemLinks.some(link => link.action_item_id === a.id && link.meeting_id === meeting.id));
+      },
+      get selectedMeetingLinks() { return []; },
       get minutesMeetings() {
         const q = this.minutesSearch.toLowerCase().trim();
         return this.meetings.filter(m =>
@@ -491,10 +822,15 @@
         return this.reminders.filter(r => !r.cancelled && (this.reminderFilter === "All" || (this.reminderFilter === "Scheduled" ? !r.sent : r.sent))).sort((a,b) => a.date.localeCompare(b.date));
       },
       go(page, filter) {
+        if (page === "members" && !this.canManageInvitations) {
+          this.toast("Only the committee owner or an admin can manage invitations.");
+          return;
+        }
         this.page = page; this.mobileNav = false;
-        const titles = { dashboard: "Dashboard", meetings: "Meeting schedule", detail: "Meeting details", actionItems: "Open action items", minutes: "Meeting minutes", reminders: "Reminders" };
+        const titles = { dashboard: "Dashboard", meetings: "Meeting schedule", detail: "Meeting details", actionItems: "Open action items", minutes: "Meeting minutes", reminders: "Reminders", members: "Members & invitations" };
         this.pageTitle = titles[page] || "Dashboard";
         if (filter) this.meetingFilter = filter;
+        if (page === "members") this.loadInvitationRoster();
         window.scrollTo({ top: 0, behavior: "smooth" });
       },
       openMeeting(id) {
@@ -941,55 +1277,123 @@
           this.cancelTargetId = null;
         }
       },
-      completeAction(id) { this.toggleAction(id); },
-      toggleAction(id) {
-        const a=this.actions.find(x=>x.id===id);if(!a)return;
-        a.status=a.status==="Completed"?"Open":"Completed";
-        this.toast(a.status==="Completed"?"Action item completed":"Action item reopened");
+      async updateActionStatus(id, status) {
+        const action = this.actions.find(item => item.id === id);
+        if (!action || !this.currentOrganization?.id) return false;
+        if (!this.canEditAction(action)) { this.toast("You can update only actions you created or are assigned to."); await this.loadWorkItemsFromDatabase(); return false; }
+        if (this.taskStatusBusy) return false;
+        this.taskStatusBusy = true;
+        try {
+          const { data, error } = await window.supabaseClient.from("action_items")
+            .update({ status: this.toDbActionStatus(status), updated_by: this.authUser.id })
+            .eq("id", id).eq("organization_id", this.currentOrganization.id)
+            .select("id").maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error("Action status was not updated. Check your access to this item.");
+          await this.loadWorkItemsFromDatabase();
+          this.toast("Action status saved to PostgreSQL.");
+          return true;
+        } catch (err) {
+          await this.loadWorkItemsFromDatabase();
+          this.toast("Could not update action status: " + (err?.message || "Database error"));
+          return false;
+        } finally { this.taskStatusBusy = false; }
+      },
+      async completeAction(id) { return await this.updateActionStatus(id, "Completed"); },
+      async toggleAction(id) {
+        const action = this.actions.find(item => item.id === id);
+        if (!action) return;
+        const nextStatus = action.status === "Completed" ? "Open" : "Completed";
+        return await this.updateActionStatus(id, nextStatus);
       },
       openActionCreate() {
-        this.editingActionId=null;
-        const next=this.meetings.filter(m=>m.status==="Scheduled").sort((a,b)=>a.date.localeCompare(b.date))[0];
-        this.actionForm={title:"",owner:"",due:"2026-10-30",meetingId:next?.id||this.meetings[0]?.id||"",agendaId:"",status:"Open"};
-        this.showActionModal=true;
+        if (!this.canContributeActions) { this.toast("Your role is read-only for action items."); return; }
+        const next = this.meetings.filter(m => m.status === "Scheduled").sort((a,b) => a.date.localeCompare(b.date))[0] || this.meetings[0];
+        if (!next) { this.toast("Schedule a meeting before creating an action item."); return; }
+        this.editingActionId = null;
+        this.actionForm = {
+          title: "", description: "", assigneeMembershipId: "", due: this.defaultMeetingDate(),
+          meetingId: next.id, agendaId: "", priority: "Normal", status: "Open"
+        };
+        this.showActionModal = true;
       },
-      unlinkAction(id) {
-        const a=this.actions.find(x=>x.id===id);if(!a)return;
-        a.linkedMeetingId="";a.linkedMeetingTitle="";a.linkedAgendaId="";a.linkedAgendaTitle="";
-        this.toast("Action removed from this meeting; original record preserved");
+      async unlinkAction(actionId, linkId) {
+        const action=this.actions.find(a=>a.id===actionId);
+        const link=this.workItemLinks.find(item=>item.id===linkId&&item.action_item_id===actionId);
+        const org=this.currentOrganization?.id;
+        if(!action||!link||!org)return;
+        if(!this.canManageActions&&link.linked_by!==this.authUser?.id){this.toast("Only an administrator or the person who added the link can remove it.");return;}
+        try{
+          const {data,error}=await window.supabaseClient.from("action_item_links").delete()
+            .eq("id",linkId).eq("organization_id",org).select("id").maybeSingle();
+          if(error)throw error;
+          if(!data)throw new Error("The carry-forward link was not removed.");
+          await this.loadWorkItemsFromDatabase();
+          this.toast("Carry-forward link removed. The original action remains in its source meeting.");
+        }catch(err){this.toast("Could not remove link: "+(err?.message||"Database error"));}
       },
       editAction(id) {
-        const a=this.actions.find(x=>x.id===id);if(!a)return;
-        this.editingActionId=id;this.actionForm={title:a.title,owner:a.owner,due:a.due,meetingId:a.meetingId,agendaId:a.agendaId||"",status:a.status};
-        this.showActionModal=true;
+        const action = this.actions.find(item => item.id === id);
+        if (!action) return;
+        if (!this.canEditAction(action)) { this.toast("You can edit only actions you created or are assigned to."); return; }
+        this.editingActionId = id;
+        this.actionForm = {
+          title: action.title, description: action.description || "",
+          assigneeMembershipId: action.assigneeMembershipId || "", due: action.due || "",
+          meetingId: action.meetingId, agendaId: action.agendaId || "",
+          priority: action.priority || "Normal", status: action.status
+        };
+        this.showActionModal = true;
       },
-      saveAction() {
-        const f=this.actionForm;const m=this.meetings.find(x=>x.id===f.meetingId);
-        if(!m||!f.title.trim()||!f.owner.trim()||!f.due){this.toast("Please complete the required fields");return;}
-        const agenda=m.agenda.find(a=>a.id===f.agendaId);
-        const values={title:f.title.trim(),owner:f.owner.trim(),due:f.due,meetingId:m.id,meetingTitle:m.title,agendaId:f.agendaId||"",agendaTitle:agenda?.title||"General follow-up",status:f.status||"Open"};
-        if(this.editingActionId){const a=this.actions.find(x=>x.id===this.editingActionId);if(a)Object.assign(a,values);this.toast("Action item updated");}
-        else {this.actions.push({id:"act-"+Date.now(),...values});this.toast("Action item added");}
-        this.showActionModal=false;
+      async saveAction() {
+        const f=this.actionForm, org=this.currentOrganization?.id, client=window.supabaseClient;
+        const m=this.meetings.find(x=>x.id===f.meetingId), a=this.editingActionId?this.actions.find(x=>x.id===this.editingActionId):null;
+        if(!this.canContributeActions||!org||!client){this.toast("Action-item changes are not permitted.");return;}
+        if(!String(f.title||"").trim()||!m){this.toast("Enter an action title and select a source meeting.");return;}
+        if(this.editingActionId&&(!a||!this.canEditAction(a))){this.toast("You cannot edit this action item.");return;}
+        if(this.taskSaveBusy)return;
+        const p={title:f.title.trim(),description:String(f.description||"").trim(),assignee_membership_id:f.assigneeMembershipId||null,due_date:f.due||null,priority:this.toDbPriority(f.priority),status:this.toDbActionStatus(f.status),updated_by:this.authUser.id};
+        this.taskSaveBusy=true;
+        try{
+          let result;
+          if(a) result=await client.from("action_items").update(p).eq("id",a.id).eq("organization_id",org).select("id").maybeSingle();
+          else result=await client.from("action_items").insert({...p,organization_id:org,source_meeting_id:m.id,source_agenda_item_id:f.agendaId||null,created_by:this.authUser.id});
+          if(result.error)throw result.error;
+          if(a&&!result.data)throw new Error("Action item was not updated.");
+          this.showActionModal=false;this.editingActionId=null;
+          await this.loadWorkItemsFromDatabase();
+          this.toast(a?"Action item updated in PostgreSQL.":"Action item saved to PostgreSQL.");
+        }catch(err){this.toast("Could not save action item: "+(err?.message||"Database error"));}
+        finally{this.taskSaveBusy=false;}
       },
-      carryActionToMeeting() {
-        if(!this.selectedMeeting)return;
+      async carryActionToMeeting() {
+        const meeting=this.selectedMeeting, org=this.currentOrganization?.id, client=window.supabaseClient;
         const action=this.actions.find(a=>a.id===this.carryActionId);
-        if(!action || action.status==="Completed"){this.toast("Choose an unresolved action item first");return;}
-        action.linkedMeetingId=this.selectedMeeting.id;
-        action.linkedMeetingTitle=this.selectedMeeting.title;
-        action.linkedAgendaId=this.carryAgendaId||"";
-        action.linkedAgendaTitle=this.selectedMeeting.agenda.find(a=>a.id===this.carryAgendaId)?.title||"General follow-up";
-        const remaining=this.actions.filter(a=>a.status!=="Completed" && a.linkedMeetingId!==this.selectedMeeting.id);
-        this.carryActionId=remaining[0]?.id||"";
-        this.toast("Action linked to this meeting; original reference preserved");
+        if(!meeting||!org||!client||!this.canContributeActions){this.toast("Your role does not allow carry-forward.");return;}
+        if(!action||!["Open","In Progress"].includes(action.status)||action.meetingId===meeting.id){this.toast("Choose an unresolved action from an earlier meeting.");return;}
+        if(this.carryAgendaId&&!meeting.agenda.some(a=>a.id===this.carryAgendaId)){this.toast("Choose an agenda item from this meeting.");return;}
+        if(this.workItemLinks.some(l=>l.action_item_id===action.id&&l.meeting_id===meeting.id)){this.toast("This action is already linked to this meeting.");return;}
+        if(this.carrySaveBusy)return;
+        this.carrySaveBusy=true;
+        try{
+          const {error}=await client.from("action_item_links").insert({
+            organization_id:org,action_item_id:action.id,meeting_id:meeting.id,
+            agenda_item_id:this.carryAgendaId||null,linked_by:this.authUser.id,
+            link_note:"Carried forward; original meeting and agenda retained."
+          });
+          if(error)throw error;
+          await this.loadWorkItemsFromDatabase();
+          this.carryActionId="";this.carryAgendaId="";
+          this.toast("Action carried forward to this meeting. Its original source remains unchanged.");
+        }catch(err){this.toast("Could not carry action forward: "+(err?.message||"Database error"));}
+        finally{this.carrySaveBusy=false;}
       },
       simulateReminder(id) {
         const r=this.reminders.find(x=>x.id===id);if(!r)return;r.sent=true;this.toast("Demo reminder simulated — no message sent");
       },
       statusClass(status) { return "status-"+String(status).toLowerCase(); },
       actionStatusClass(status) { return "status-"+String(status).toLowerCase().replace(/\s+/g,"-"); },
-      dueClass(due) { if(due<this.demoToday)return "due-overdue";if(due<= "2026-10-21")return "due-soon";return ""; },
+      dueClass(due) { if (!due) return ""; if (due < this.demoToday) return "due-overdue"; const delta = this.dateObj(due).getTime() - this.dateObj(this.demoToday).getTime(); return delta <= 259200000 ? "due-soon" : ""; },
       initials(name) { return String(name||"").split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join(""); },
       dateObj(date) { return new Date(date+"T12:00:00"); },
       monthShort(date) { return this.dateObj(date).toLocaleDateString("en-IN",{month:"short"}).toUpperCase(); },
