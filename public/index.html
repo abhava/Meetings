@@ -42,7 +42,7 @@
               Invitation for <strong x-text="invitationDetails?.organization_name"></strong> · role <strong x-text="roleLabel(invitationDetails?.role)"></strong>.
             </div>
             <div class="auth-alert auth-alert-error" x-show="invitationToken && !invitationLookupBusy && !invitationDetails?.valid">
-              This invitation link is invalid, expired, or revoked. Ask your committee owner/admin to send a new invitation.
+              This invitation link is invalid, expired, or revoked. Ask your committee owner to send a new invitation.
             </div>
             <div class="auth-alert auth-alert-error" x-show="invitationDetails?.valid && !invitationMatchesSignedInUser">
               This invitation was issued to a different email address. Sign out and use the exact invited email.
@@ -183,14 +183,14 @@
       </section>
       <section x-show="page==='members'" x-cloak>
         <div class="page-title-row">
-          <div><div class="eyebrow">ACCESS / ADMINISTRATION</div><h1>Members & invitations</h1><p class="page-subtitle">Invite a named email address and assign its committee role. Access is activated only after email verification and invitation acceptance.</p></div>
+          <div><div class="eyebrow">ACCESS / ADMINISTRATION</div><h1>Members & invitations</h1><p class="page-subtitle">Only the active committee owner can manage members and invitations. Access is activated only after email verification and invitation acceptance.</p></div>
           <button class="btn btn-secondary" @click="loadInvitationRoster()" :disabled="membersLoading">Refresh list ↻</button>
         </div>
         <div class="panel invitation-create-panel">
           <div class="panel-header"><div><h2>Invite a committee member</h2><p>Supabase sends a magic-link email to the invited address. Invitations expire after 7 days and can be revoked before acceptance.</p></div></div>
           <form class="invitation-form" @submit.prevent="createInvitation()">
             <div class="form-field"><label for="inviteEmail">INVITEE EMAIL ADDRESS</label><input id="inviteEmail" type="email" required maxlength="254" autocomplete="off" x-model.trim="inviteEmail" placeholder="member@example.com"></div>
-            <div class="form-field"><label for="inviteRole">PREDEFINED ROLE</label><select id="inviteRole" x-model="inviteRole"><option value="member">Regular member</option><option value="admin" x-show="currentMembership?.role==='owner'">Admin</option><option value="owner" x-show="currentMembership?.role==='owner'">Owner — transfers ownership when accepted</option></select><small class="auth-field-help" x-show="currentMembership?.role==='admin'">Admins can invite regular members only.</small></div>
+            <div class="form-field"><label for="inviteRole">PREDEFINED ROLE</label><select id="inviteRole" x-model="inviteRole"><option value="member">Regular member</option><option value="admin">Admin</option><option value="owner">Owner — transfers ownership when accepted</option></select></div>
             <button type="submit" class="btn btn-primary" :disabled="inviteBusy"><span x-show="!inviteBusy">Create invitation</span><span x-show="inviteBusy">Creating…</span></button>
           </form>
           <div class="auth-alert auth-alert-error" x-show="invitationError" x-text="invitationError"></div>
@@ -218,7 +218,7 @@
             <div class="empty-state" x-show="invitationRows.length===0 && !membersLoading"><strong>No invitation history found</strong><p>New invitations will appear here.</p></div>
           </div>
         </div>
-        <div class="carry-forward-note"><span>i</span><div><strong>Role controls</strong><p>Owners can invite members, admins, or transfer ownership. Admins can invite regular members only. Regular members cannot invite people or change roles. These checks are enforced by the database, not just this screen.</p></div></div>
+        <div class="carry-forward-note"><span>i</span><div><strong>Owner-only access</strong><p>Only the active committee owner can open this page, create invitations, review invitation history, revoke invitations, or assign an invitee's role. Admins and other members cannot use this page or its invitation controls. The database enforces these restrictions too.</p></div></div>
       </section>
     </div>
   </main>

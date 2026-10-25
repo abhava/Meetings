@@ -1,8 +1,179 @@
 -- Our Meetings: invitation-only membership and access gates
 -- Apply this script in the Supabase SQL Editor for project xwgtjwpvmbyubmhnviks.
 -- It is deliberately separate from Hatchable's own PostgreSQL database.
+-- Run as one transaction in the Supabase SQL Editor so a failure does not leave
+-- the invitation and access-control changes partially applied.
+begin;
 
 create extension if not exists pgcrypto with schema extensions;
+
+-- Preserve profile creation/update on Supabase Auth events, but remove the legacy
+-- behavior that automatically activates an invited membership merely because a
+-- matching Auth user is created or changes email. New access must go through the
+-- token-validated accept_organization_invitation() function below.
+create or replace function public.handle_new_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles(id, email, full_name, created_at, updated_at)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', ''),
+    now(),
+    now()
+  )
+  on conflict (id) do update set email = excluded.email;
+
+  return new;
+end;
+$$;
+revoke all on function public.handle_new_auth_user() from public, anon, authenticated;
+
+-- Keep the legacy workspace-creation function for controlled maintenance, but harden
+-- its SECURITY DEFINER search path before revoking client execution below.
+create or replace function public.create_organization(
+  p_name text,
+  p_slug text,
+  p_timezone text DEFAULT 'Asia/Kolkata'::text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  new_org_id uuid;
+  clean_slug text;
+begin
+  if auth.uid() is null then raise exception 'Sign in is required'; end if;
+  if nullif(trim(p_name), '') is null then raise exception 'Organization name is required'; end if;
+
+  clean_slug := trim(both '-' from regexp_replace(lower(trim(p_slug)), '[^a-z0-9]+', '-', 'g'));
+  if nullif(clean_slug, '') is null then raise exception 'A valid slug is required'; end if;
+
+  insert into public.organizations(name, slug, timezone, created_by)
+  values (
+    trim(p_name),
+    clean_slug,
+    coalesce(nullif(trim(p_timezone), ''), 'Asia/Kolkata'),
+    auth.uid()
+  )
+  returning id into new_org_id;
+
+  insert into public.organization_memberships(organization_id, user_id, role, status, joined_at)
+  values (new_org_id, auth.uid(), 'owner', 'active', now());
+
+  insert into public.meeting_reminder_rules(
+    organization_id, event_type, minutes_before, channel,
+    recipient_scope, enabled, created_by
+  )
+  values
+    (new_org_id, 'meeting_reminder', 1440, 'in_app', 'attendees', true, auth.uid()),
+    (new_org_id, 'meeting_reminder', 60, 'in_app', 'attendees', true, auth.uid());
+
+  return new_org_id;
+end;
+$$;
+
+-- Harden existing membership helper functions used by legacy RLS policies.
+-- Preserve authenticated execution for policy evaluation and application compatibility,
+-- but remove unnecessary PUBLIC/anon execution and use an empty search_path.
+create or replace function public.current_membership_id(target_org uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select m.id
+  from public.organization_memberships m
+  where m.organization_id = target_org
+    and m.user_id = auth.uid()
+    and m.status = 'active'
+  limit 1;
+$$;
+
+create or replace function public.is_org_admin(target_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.organization_memberships m
+    where m.organization_id = target_org
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role in ('owner', 'admin')
+  );
+$$;
+
+create or replace function public.is_org_contributor(target_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.organization_memberships m
+    where m.organization_id = target_org
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role in ('owner', 'admin', 'member')
+  );
+$$;
+
+create or replace function public.is_org_member(target_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.organization_memberships m
+    where m.organization_id = target_org
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+  );
+$$;
+
+create or replace function public.is_org_owner(target_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.organization_memberships m
+    where m.organization_id = target_org
+      and m.user_id = auth.uid()
+      and m.status = 'active'
+      and m.role = 'owner'
+  );
+$$;
+
+revoke all on function public.current_membership_id(uuid) from public, anon;
+revoke all on function public.is_org_admin(uuid) from public, anon;
+revoke all on function public.is_org_contributor(uuid) from public, anon;
+revoke all on function public.is_org_member(uuid) from public, anon;
+revoke all on function public.is_org_owner(uuid) from public, anon;
+grant execute on function public.current_membership_id(uuid) to authenticated;
+grant execute on function public.is_org_admin(uuid) to authenticated;
+grant execute on function public.is_org_contributor(uuid) to authenticated;
+grant execute on function public.is_org_member(uuid) to authenticated;
+grant execute on function public.is_org_owner(uuid) to authenticated;
 
 create table if not exists public.organization_invitations (
   id uuid primary key default gen_random_uuid(),
@@ -24,6 +195,11 @@ create unique index if not exists organization_invitations_one_pending_email
 
 create index if not exists organization_invitations_org_created
   on public.organization_invitations (organization_id, created_at desc);
+
+-- Only one unresolved ownership-transfer invitation may be active per organisation.
+create unique index if not exists organization_invitations_one_pending_owner
+  on public.organization_invitations (organization_id)
+  where status = 'pending' and role = 'owner';
 
 alter table public.organization_invitations enable row level security;
 revoke all on table public.organization_invitations from anon, authenticated;
@@ -74,7 +250,7 @@ language sql
 stable
 security definer
 set search_path = ''
-as $
+as $$
   select p_profile_id = auth.uid() or exists (
     select 1
     from public.organization_memberships target_membership
@@ -82,12 +258,12 @@ as $
       and target_membership.status = 'active'
       and public.is_active_org_member(target_membership.organization_id)
   );
-$;
+$$;
 revoke all on function public.can_read_profile(uuid) from public;
 grant execute on function public.can_read_profile(uuid) to authenticated;
 
--- Invitation creation is allowed only to active owners/admins. Admins can invite
--- regular members only. Only an owner can initiate a role transfer to another owner.
+-- Invitation creation, listing, and revocation are restricted to active owners only.
+-- Administrative permissions for meetings/actions are separate from invitation access.
 create or replace function public.create_organization_invitation(
   p_organization_id uuid,
   p_email text,
@@ -107,22 +283,19 @@ declare
   v_expiry timestamptz;
 begin
   if v_actor is null then raise exception 'Sign in before inviting a committee member'; end if;
-  if length(v_email) < 5 or position('@' in v_email) < 2 or v_email ~ '\s' then
+  if length(v_email) < 5 or position('@' in v_email) < 2 or v_email ~ '[[:space:]]' then
     raise exception 'Enter a valid email address';
   end if;
   if p_role not in ('owner','admin','member') then raise exception 'Invalid committee role'; end if;
 
-  select m.role into v_actor_role
+  select m.role::text into v_actor_role
   from public.organization_memberships m
   where m.organization_id = p_organization_id
     and m.user_id = v_actor and m.status = 'active'
   limit 1;
 
-  if v_actor_role is null or v_actor_role not in ('owner','admin') then
-    raise exception 'Only an active owner or admin can invite members';
-  end if;
-  if v_actor_role = 'admin' and p_role <> 'member' then
-    raise exception 'Admins can invite regular members only';
+  if v_actor_role is distinct from 'owner' then
+    raise exception 'Only an active owner can manage committee invitations';
   end if;
 
   if exists (
@@ -134,6 +307,15 @@ begin
       and lower(coalesce(u.email, m.invited_email, '')) = v_email
   ) then
     raise exception 'This email already has an active membership in this committee';
+  end if;
+
+  -- Only one pending ownership-transfer invitation may exist per organisation.
+  -- Issuing a new one revokes any older owner-transfer link.
+  if p_role = 'owner' then
+    update public.organization_invitations
+       set status = 'revoked'
+     where organization_id = p_organization_id
+       and role = 'owner' and status = 'pending';
   end if;
 
   -- Reissue safely: invalidate any previous pending invitation for this address.
@@ -209,8 +391,8 @@ as $$
 declare
   v_rows jsonb;
 begin
-  if auth.uid() is null or not public.is_org_manager(p_organization_id) then
-    raise exception 'Only an active owner or admin can view invitations';
+  if auth.uid() is null or not public.is_org_owner(p_organization_id) then
+    raise exception 'Only an active owner can view invitations';
   end if;
 
   select coalesce(jsonb_agg(jsonb_build_object(
@@ -242,17 +424,14 @@ begin
   select * into v_inv from public.organization_invitations where id = p_invitation_id for update;
   if not found then raise exception 'Invitation not found'; end if;
 
-  select role into v_actor_role
+  select role::text into v_actor_role
   from public.organization_memberships
   where organization_id = v_inv.organization_id
     and user_id = auth.uid() and status = 'active'
   limit 1;
 
-  if v_actor_role is null or v_actor_role not in ('owner','admin') then
-    raise exception 'Only an active owner or admin can revoke invitations';
-  end if;
-  if v_actor_role = 'admin' and v_inv.role <> 'member' then
-    raise exception 'Admins can revoke regular-member invitations only';
+  if v_actor_role is distinct from 'owner' then
+    raise exception 'Only an active owner can revoke invitations';
   end if;
   if v_inv.status <> 'pending' then return false; end if;
 
@@ -275,7 +454,7 @@ declare
   v_confirmed_at timestamptz;
   v_inv public.organization_invitations%rowtype;
   v_membership_id uuid;
-  v_existing_status text;
+  v_existing_status public.membership_status;
 begin
   if v_user_id is null then raise exception 'Sign in using the invited email first'; end if;
 
@@ -301,6 +480,14 @@ begin
     raise exception 'Invitation has expired; ask an administrator to send a new one';
   end if;
 
+  -- Serialize invitation acceptance within an organization. This prevents two
+  -- concurrent owner invitations from racing through the ownership-transfer step.
+  perform o.id
+  from public.organizations o
+  where o.id = v_inv.organization_id
+  for update;
+  if not found then raise exception 'Committee no longer exists'; end if;
+
   select id, status into v_membership_id, v_existing_status
   from public.organization_memberships
   where organization_id = v_inv.organization_id and user_id = v_user_id
@@ -311,6 +498,14 @@ begin
   end if;
 
   if v_inv.role = 'owner' then
+    -- Invalidate every other pending ownership-transfer link before changing owners.
+    update public.organization_invitations
+       set status = 'revoked'
+     where organization_id = v_inv.organization_id
+       and id <> v_inv.id
+       and role = 'owner'
+       and status = 'pending';
+
     update public.organization_memberships
        set role = 'admin'
      where organization_id = v_inv.organization_id
@@ -321,10 +516,10 @@ begin
     insert into public.organization_memberships
       (organization_id, user_id, invited_email, role, status)
     values
-      (v_inv.organization_id, v_user_id, v_email, v_inv.role, 'active');
+      (v_inv.organization_id, v_user_id, v_email, v_inv.role::public.org_member_role, 'active');
   else
     update public.organization_memberships
-       set invited_email = v_email, role = v_inv.role, status = 'active'
+       set invited_email = v_email, role = v_inv.role::public.org_member_role, status = 'active'
      where id = v_membership_id;
   end if;
 
@@ -436,7 +631,7 @@ create policy org_membership_block_client_delete
   using (false);
 
 -- Explicitly remove anonymous table privileges. RLS is the second protection layer.
-do $
+do $$
 declare
   v_table text;
 begin
@@ -451,4 +646,6 @@ begin
   loop
     execute format('revoke all on table public.%I from anon', v_table);
   end loop;
-end $;
+end $$;
+
+commit;

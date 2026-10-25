@@ -145,7 +145,7 @@
           let shouldCreateUser = false;
           if (this.invitationToken) {
             await this.loadInvitationDetails();
-            if (!this.invitationDetails?.valid) throw new Error("This invitation is invalid or expired. Ask your committee owner/admin for a new link.");
+            if (!this.invitationDetails?.valid) throw new Error("This invitation is invalid or expired. Ask your committee owner for a new link.");
             if (email !== String(this.invitationDetails.email || "").trim().toLowerCase()) {
               throw new Error("Use the exact email address to which this invitation was issued.");
             }
@@ -267,7 +267,7 @@
         return ["owner", "admin"].includes(this.currentMembership?.role);
       },
       get canManageInvitations() {
-        return ["owner", "admin"].includes(this.currentMembership?.role);
+        return this.currentMembership?.role === "owner";
       },
       get invitationMatchesSignedInUser() {
         return !!(this.invitationDetails?.valid && this.authUser?.email &&
@@ -281,7 +281,7 @@
         if (this.invitationDetails?.valid && !this.invitationMatchesSignedInUser) {
           return "This invitation is for " + this.invitationDetails.email + ". Sign out and request a magic link using that exact email address.";
         }
-        return "You're signed in as " + (this.authUser?.email || "this account") + ", but have no active committee membership. Knowing the app URL or signing in does not grant access. Contact your committee owner/admin for an invitation link.";
+        return "You're signed in as " + (this.authUser?.email || "this account") + ", but have no active committee membership. Knowing the app URL or signing in does not grant access. Contact your committee owner for an invitation link.";
       },
       canEditAction(action) {
         if (!action || !this.canContributeActions) return false;
@@ -604,7 +604,7 @@
       },
       async createInvitation() {
         if (!this.canManageInvitations || !this.currentOrganization?.id || this.inviteBusy) {
-          this.invitationError = "Only an active owner or admin can create invitations.";
+          this.invitationError = "Only an active owner can create invitations.";
           return;
         }
         const email = String(this.inviteEmail || "").trim().toLowerCase();
@@ -613,9 +613,8 @@
           this.invitationError = "Enter a valid email address.";
           return;
         }
-        if (!["owner","admin","member"].includes(role) ||
-            (this.currentMembership.role === "admin" && role !== "member")) {
-          this.invitationError = "Your role is not allowed to assign that membership role.";
+        if (!["owner","admin","member"].includes(role)) {
+          this.invitationError = "Choose a valid membership role.";
           return;
         }
         this.inviteBusy = true;
@@ -698,12 +697,12 @@
         });
       },
       async createOrganization() {
-        this.authError = "Self-service workspace creation is disabled. Ask an existing committee owner/admin for an invitation.";
+        this.authError = "Self-service workspace creation is disabled. Ask the committee owner for an invitation.";
         this.authState = "noMembership";
         return;
       },
       async legacyCreateOrganizationDisabled() {
-        this.authError = "Self-service workspace creation is disabled. Ask an existing committee owner/admin for an invitation.";
+        this.authError = "Self-service workspace creation is disabled. Ask the committee owner for an invitation.";
         this.authState = "noMembership";
         return;
       },
@@ -823,7 +822,7 @@
       },
       go(page, filter) {
         if (page === "members" && !this.canManageInvitations) {
-          this.toast("Only the committee owner or an admin can manage invitations.");
+          this.toast("Only the committee owner can manage members and invitations.");
           return;
         }
         this.page = page; this.mobileNav = false;
