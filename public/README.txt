@@ -22,8 +22,8 @@ PostgreSQL-connected follow-up tracking:
 - Carry-forward records use public.action_item_links so an action can be revisited at a later meeting without changing its origin.
 - Assignment choices are based on active committee memberships.
 
-Still demo-only:
-- Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
+Reminder integration (setup required before live use):
+- Reminder configuration is in `public/reminders.js`; in-app history uses `public.reminder_notifications` and reminder-specific settings use `public.member_reminder_preferences` in Supabase. The existing `public.notification_preferences` consent/channel table is preserved and records explicit email opt-in/withdrawal (channel=email, consent_status=opted_in/opted_out); the dispatcher sends email only for a valid, non-revoked opt-in. The current source is staged until the backend service key is configured in Hatchable Setup and the feature is deployed.
 
 Invitation-only member onboarding (draft implementation):
 - Workspace self-creation from the signed-in no-membership screen is disabled in the app.
@@ -35,7 +35,7 @@ Invitation-only member onboarding (draft implementation):
 - Before release, apply and review that SQL in Supabase, verify the exact column names and existing RLS policies, configure Supabase Auth redirect URLs for the production/draft site, and ensure no service-role key is placed in frontend files.
 - Verify owner-only access to the Members & invitations page and invitation-management RPCs; admin/member/viewer denials; uninvited/unauthenticated behavior; cross-organization isolation; invitation expiry/revocation/reuse; email mismatch; role escalation prevention; and ownership transfer before using the feature for real members.
 
-Still demo-only:
-- Reminder scheduling/preferences are simulated; no email or WhatsApp reminder is sent.
+Remaining release checks:
+- Reminder delivery is not live until `lib/supabase-reminders-migration.sql` is applied in the external Supabase project and the private `SUPABASE_SECRET_KEY` (prefer the Supabase `sb_secret_...` key) is configured in Hatchable Setup. Do not put the service-role key in frontend code or chat.
 - Owner invitation creation requests a Supabase Auth magic-link email with the one-time invitation token in the redirect. If Supabase reports an email-send error, the UI exposes a copyable fallback link.
 - Confirm the Supabase email template and SMTP sender deliver the expected redirect link; a successful API response must still be followed by an end-to-end inbox test.

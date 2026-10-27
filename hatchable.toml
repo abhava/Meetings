@@ -1,0 +1,8 @@
+[[secret]]
+key = "SUPABASE_SECRET_KEY"
+required = true
+description = "Server-only Supabase secret API key (prefer sb_secret_...) for the scheduled reminder dispatcher. Never use the browser publishable key here."
+
+[[cron]]
+path = "/api/jobs/dispatch-reminders"
+schedule = "0 * * * *"
