@@ -201,7 +201,7 @@
         this.actions = [];
         this.activeMembers = [];
         this.tasksLoaded = false;
-        this.tasksError = error?.message || "Could not load action items from Supabase.";
+        this.tasksError = error?.message || "Could not load action items.";
       } finally {
         this.tasksLoading = false;
       }
@@ -312,7 +312,7 @@
         this.showActionModal = false;
         this.editingActionId = null;
         await this.loadWorkItemsFromDatabase();
-        this.toast(existing ? "Action item updated in PostgreSQL." : "Action item saved to PostgreSQL.");
+        this.toast(existing ? "Action item updated." : "Action item saved.");
       } catch (error) {
         this.toast("Could not save action item: " + (error?.message || "Database error"));
       } finally {

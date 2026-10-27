@@ -144,9 +144,8 @@
         }));
       } catch (error) {
         if (requestId !== this._reminderLoadRequest) return;
-        this.remindersError = /relation .* does not exist|could not find the table|schema cache/i.test(String(error?.message || ''))
-          ? 'Reminder tables are not installed in Supabase yet. Run lib/supabase-reminders-migration.sql in the Supabase SQL Editor, then refresh. Details: ' + error.message
-          : 'Could not load reminders: ' + (error?.message || 'Database error');
+        console.error('Could not load reminder data.', error);
+        this.remindersError = 'Reminders are temporarily unavailable. Please try again or contact your committee administrator.';
       } finally {
         if (requestId === this._reminderLoadRequest) this.remindersLoading = false;
       }

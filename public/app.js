@@ -99,7 +99,7 @@
         const client = window.supabaseClient;
         if (!client) {
           this.authState = "error";
-          this.authError = "Supabase could not initialize. Refresh the page or check the project configuration.";
+          this.authError = "Our Meetings couldn't start. Refresh the page or try again shortly.";
           return;
         }
         if (this.invitationToken) await this.loadInvitationDetails();
@@ -574,7 +574,7 @@
               .eq("organization_id", orgId).eq("status", "active")
               .order("created_at", { ascending: true })
           ]);
-          if (invitesResult.error) throw new Error("Invitation backend is not ready: " + invitesResult.error.message);
+          if (invitesResult.error) throw new Error("Invitations could not be loaded: " + invitesResult.error.message);
           if (membersResult.error) throw new Error("Could not load active members: " + membersResult.error.message);
           const rows = membersResult.data || [];
           const userIds = [...new Set(rows.map(row => row.user_id).filter(Boolean))];
@@ -644,11 +644,11 @@
             // The DB invitation is already pending. Expose its token only as a
             // one-time manual fallback when Supabase cannot send the magic link.
             this.invitationLink = link.toString();
-            this.invitationError = "The invitation was saved, but Supabase could not send the magic-link email: " + emailError.message + ". Copy the fallback link below and send it privately to the invited address.";
+            this.invitationError = "The invitation was saved, but we couldn't send the sign-in email: " + emailError.message + ". Copy the fallback link below and send it privately to the invited address.";
             this.invitationMessage = "Invitation saved for " + email + "; email delivery needs attention.";
           } else {
             this.invitationLink = "";
-            this.invitationMessage = "Supabase accepted the magic-link email request for " + email + ". After signing in, the invitee must accept this invitation before committee access is activated.";
+            this.invitationMessage = "A sign-in link has been requested for " + email + ". After signing in, the invitee must accept the invitation before committee access is activated.";
           }
           await this.loadInvitationRoster();
         } catch (err) {
@@ -839,7 +839,7 @@
           this.go("detail");
           this.pageTitle = "Meeting details";
         } else {
-          this.toast("This item belongs to the sample action-item data. Action-item persistence will be connected next.");
+          this.toast("This action item is no longer available. Refresh the list and try again.");
         }
       },
       scrollCarousel(direction) {
@@ -970,7 +970,7 @@
             const names = String(f.attendees || "").split(",").map(name => name.trim()).filter(Boolean);
             await this.saveMeetingAttendees(meetingId, names);
           } catch (attendeeError) {
-            attendeeWarning = " The meeting saved, but attendees could not be saved: " + (attendeeError.message || "permission or database error");
+            attendeeWarning = " The meeting was saved, but attendees could not be saved: " + (attendeeError.message || "permission issue or temporary error");
           }
 
           this.showMeetingModal = false;
@@ -984,9 +984,9 @@
               this.pageTitle = "Meeting details";
             }
           }
-          this.toast((status === "scheduled" && !attendeeWarning ? "Meeting saved to PostgreSQL." : "Meeting saved.") + attendeeWarning);
+          this.toast("Meeting saved." + attendeeWarning);
         } catch (err) {
-          this.toast("Could not save meeting: " + (err?.message || "Unknown database error"));
+          this.toast("Could not save meeting: " + (err?.message || "Unexpected error"));
         } finally {
           this.meetingSaveBusy = false;
         }
@@ -1047,7 +1047,7 @@
           this.showAgendaModal = false;
           this.editingAgendaId = null;
           await this.loadMeetingsFromDatabase();
-          this.toast(wasEdit ? "Agenda item saved to PostgreSQL." : "Agenda item added to PostgreSQL.");
+          this.toast(wasEdit ? "Agenda item updated." : "Agenda item added.");
         } catch (err) {
           this.toast("Could not save agenda item: " + (err?.message || "Database error"));
         } finally {
@@ -1079,7 +1079,7 @@
             if (error) throw error;
           }
           await this.loadMeetingsFromDatabase();
-          this.toast("Agenda order saved to PostgreSQL.");
+          this.toast("Agenda order saved.");
         } catch (err) {
           await this.loadMeetingsFromDatabase();
           this.toast("Could not reorder agenda: " + (err?.message || "Database error"));
@@ -1099,7 +1099,7 @@
           if (error) throw error;
           if (!data) throw new Error("Agenda item was not removed. Check your role and organization access.");
           await this.loadMeetingsFromDatabase();
-          this.toast("Agenda item removed from PostgreSQL.");
+          this.toast("Agenda item removed.");
         } catch (err) {
           this.toast("Could not remove agenda item: " + (err?.message || "A linked action item may depend on it."));
         }
@@ -1139,7 +1139,7 @@
             if (error) throw error;
           }
           await this.loadMeetingsFromDatabase();
-          this.toast("Agenda discussion and decision saved to PostgreSQL.");
+          this.toast("Agenda notes and decision saved.");
         } catch (err) {
           this.toast("Could not save agenda minutes: " + (err?.message || "Database error"));
         } finally {
@@ -1200,7 +1200,7 @@
             if (error) throw error;
           }
           await this.loadMeetingsFromDatabase();
-          this.toast(status === "final" ? "Meeting minutes finalized." : status === "in_review" ? "Meeting minutes submitted for review." : "Meeting minutes draft saved to PostgreSQL.");
+          this.toast(status === "final" ? "Meeting minutes finalized." : status === "in_review" ? "Meeting minutes submitted for review." : "Meeting minutes draft saved.");
         } catch (err) {
           this.toast("Could not save meeting minutes: " + (err?.message || "Database error"));
         } finally {
@@ -1290,7 +1290,7 @@
           if (error) throw error;
           if (!data) throw new Error("Action status was not updated. Check your access to this item.");
           await this.loadWorkItemsFromDatabase();
-          this.toast("Action status saved to PostgreSQL.");
+          this.toast("Action status saved.");
           return true;
         } catch (err) {
           await this.loadWorkItemsFromDatabase();
@@ -1361,7 +1361,7 @@
           if(a&&!result.data)throw new Error("Action item was not updated.");
           this.showActionModal=false;this.editingActionId=null;
           await this.loadWorkItemsFromDatabase();
-          this.toast(a?"Action item updated in PostgreSQL.":"Action item saved to PostgreSQL.");
+          this.toast(a?"Action item updated.":"Action item saved.");
         }catch(err){this.toast("Could not save action item: "+(err?.message||"Database error"));}
         finally{this.taskSaveBusy=false;}
       },
