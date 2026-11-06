@@ -228,6 +228,10 @@
     };
 
     state.saveNotificationPreferences = async function () {
+      if (this.currentMembership?.role === 'viewer') {
+        this.toast('Guest demo access is read-only. Reminder preferences cannot be changed.');
+        return;
+      }
       const client = window.supabaseClient;
       const orgId = this.currentOrganization?.id;
       const userId = this.authUser?.id;
@@ -299,6 +303,7 @@
     };
 
     state.markReminderRead = async function (id) {
+      if (this.currentMembership?.role === 'viewer') return;
       const client = window.supabaseClient;
       const orgId = this.currentOrganization?.id;
       const userId = this.authUser?.id;
@@ -337,14 +342,48 @@
       return result;
     };
 
+    state.verifyCurrentMembership = async function () {
+      const client = window.supabaseClient;
+      const membership = this.currentMembership;
+      if (!client || !membership?.id || this.authState !== 'ready') return;
+      try {
+        const { data, error } = await client.from('organization_memberships')
+          .select('id, status, role')
+          .eq('id', membership.id)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data || data.status !== 'active') {
+          this.resetAuthContext();
+          this.meetings = [];
+          this.actions = [];
+          this.workItemLinks = [];
+          this.authState = 'noMembership';
+          this.guestAccessError = 'Your demo access has been revoked or suspended. Contact the workspace owner if you need access again.';
+          return;
+        }
+        if (data.role !== membership.role) {
+          this.currentMembership = { ...membership, role: data.role, status: data.status };
+          this.memberships = this.memberships.map(item =>
+            item.id === data.id ? { ...item, role: data.role, status: data.status } : item
+          );
+          if (data.role !== 'owner' && this.page === 'members') this.go('dashboard');
+        }
+      } catch (error) {
+        console.warn('Could not refresh the current membership status:', error?.message || error);
+      }
+    };
+
     const baseInit = state.init;
     state.init = async function (...args) {
       const result = await baseInit.apply(this, args);
       const app = this;
       if (!app._reminderRefreshHandle && typeof window.setInterval === 'function') {
-        app._reminderRefreshHandle = window.setInterval(() => {
+        app._reminderRefreshHandle = window.setInterval(async () => {
           if (app.authState === 'ready' && app.currentOrganization?.id &&
-              (typeof document === 'undefined' || document.visibilityState !== 'hidden')) app.loadReminderData();
+              (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
+            await app.verifyCurrentMembership();
+            if (app.authState === 'ready') await app.loadReminderData();
+          }
         }, 5 * 60 * 1000);
       }
       return result;

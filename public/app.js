@@ -9,7 +9,7 @@
       authUser: null, authSession: null, profile: null,
       memberships: [], currentMembership: null, currentOrganization: null,
       selectedMembershipId: "", loginEmail: "", loginBusy: false,
-      authError: "", authMessage: "", organizationName: "", organizationSlug: "",
+      authError: "", authMessage: "", guestAccessError: "", organizationName: "", organizationSlug: "",
       organizationBusy: false, authSubscription: null,
       invitationToken: new URLSearchParams(window.location.search).get("invite") || "",
       invitationDetails: null, invitationLookupBusy: false, inviteAcceptBusy: false,
@@ -153,6 +153,9 @@
             // first-time Auth account creation from this UI.
             shouldCreateUser = true;
           }
+          // Public visitors may create an Auth identity for verified, read-only
+          // demo access. The database grants Viewer only after this email link is used.
+          if (!this.invitationToken) shouldCreateUser = true;
           const redirectUrl = new URL("/", window.location.origin);
           if (this.invitationToken) redirectUrl.searchParams.set("invite", this.invitationToken);
           const { error } = await window.supabaseClient.auth.signInWithOtp({
@@ -165,7 +168,9 @@
           if (error) {
             this.authError = error.message;
           } else {
-            this.authMessage = "If this email belongs to a registered account, a sign-in link has been sent. Open it in this browser to continue.";
+            this.authMessage = this.invitationToken
+              ? "A secure sign-in link has been requested. Open it in this browser, then accept your committee invitation."
+              : "A secure verification link has been requested. Open it to verify your email and activate read-only demo access.";
           }
         } catch (err) {
           this.authError = err?.message || "Could not request a sign-in link.";
@@ -210,7 +215,25 @@
             this.organizationName = "";
             this.organizationSlug = "";
             this.authState = "noMembership";
-            if (this.invitationToken) await this.loadInvitationDetails();
+
+            // Invitation links retain their explicit acceptance flow. All other
+            // visitors can request read-only demo access, but the database verifies
+            // the email-confirmed Auth identity before creating a Viewer membership.
+            if (this.invitationToken) {
+              await this.loadInvitationDetails();
+              return;
+            }
+
+            this.guestAccessError = "";
+            const guestResult = await client.rpc("create_guest_demo_membership", {
+              p_email: session.user.email || ""
+            });
+            if (guestResult.error) throw new Error("Could not activate read-only demo access: " + guestResult.error.message);
+            if (!guestResult.data?.ok) {
+              this.guestAccessError = guestResult.data?.message || "Read-only demo access could not be activated. Contact the workspace owner.";
+              return;
+            }
+            await this.loadUserContext(session, true);
             return;
           }
           const organizationIds = [...new Set(rows.map(row => row.organization_id))];
@@ -274,6 +297,7 @@
           String(this.authUser.email).trim().toLowerCase() === String(this.invitationDetails.email || "").trim().toLowerCase());
       },
       get noMembershipMessage() {
+        if (this.guestAccessError) return this.guestAccessError;
         if (this.invitationLookupBusy) return "Checking the invitation and confirming that it belongs to your email address…";
         if (this.invitationDetails?.valid && this.invitationMatchesSignedInUser) {
           return "You're signed in as " + this.authUser.email + ". Accept the invitation below to activate your preassigned role in " + (this.invitationDetails.organization_name || "the committee workspace") + ".";
@@ -570,13 +594,16 @@
           const [invitesResult, membersResult] = await Promise.all([
             window.supabaseClient.rpc("list_organization_invitations", { p_organization_id: orgId }),
             window.supabaseClient.from("organization_memberships")
-              .select("id, user_id, invited_email, committee_title, role, status, created_at")
-              .eq("organization_id", orgId).eq("status", "active")
+              .select("id, user_id, invited_email, committee_title, role, status, access_source, created_at, joined_at")
+              .eq("organization_id", orgId)
               .order("created_at", { ascending: true })
           ]);
           if (invitesResult.error) throw new Error("Invitations could not be loaded: " + invitesResult.error.message);
           if (membersResult.error) throw new Error("Could not load active members: " + membersResult.error.message);
-          const rows = membersResult.data || [];
+          // Keep revoked self-service guests visible for owner audit and follow-up.
+          const rows = (membersResult.data || []).filter(row =>
+            row.status === "active" || row.access_source === "guest_self_service"
+          );
           const userIds = [...new Set(rows.map(row => row.user_id).filter(Boolean))];
           let profileRows = [];
           if (userIds.length) {
@@ -592,7 +619,10 @@
             return {
               id: row.id, userId: row.user_id, email,
               name: String(profile.full_name || row.committee_title || email || "Committee member").trim(),
-              role: row.role, status: row.status
+              role: row.role, status: row.status,
+              accessSource: row.access_source || "invitation",
+              isGuest: row.access_source === "guest_self_service",
+              joinedAt: row.joined_at || null
             };
           }).sort((a,b) => ({owner:0,admin:1,member:2,viewer:3}[a.role] ?? 4) - ({owner:0,admin:1,member:2,viewer:3}[b.role] ?? 4) || a.name.localeCompare(b.name));
           this.invitationRows = Array.isArray(invitesResult.data) ? invitesResult.data : [];
@@ -600,6 +630,68 @@
           this.rosterError = err?.message || "Could not load the access roster.";
         } finally {
           this.membersLoading = false;
+        }
+      },
+      async changeGuestRole(membershipId, role) {
+        if (!this.canManageInvitations || !membershipId) return;
+        if (!["owner", "admin", "member", "viewer"].includes(role)) {
+          this.invitationError = "Choose a valid role.";
+          await this.loadInvitationRoster();
+          return;
+        }
+        const guest = this.organizationMembers.find(row => row.id === membershipId && row.isGuest);
+        if (!guest || guest.status !== "active" || guest.userId === this.authUser?.id) return;
+        if (role === "owner" && !window.confirm("Transfer workspace ownership to this guest? Your own role will become Committee Admin and you will lose Owner-only access.")) {
+          await this.loadInvitationRoster();
+          return;
+        }
+        this.invitationError = "";
+        this.invitationMessage = "";
+        this.inviteRevokeBusy = true;
+        try {
+          const { data, error } = await window.supabaseClient.rpc("owner_change_guest_membership_role", {
+            p_membership_id: membershipId,
+            p_role: role
+          });
+          if (error) throw error;
+          if (!data?.ok) throw new Error("The guest role was not changed.");
+          this.invitationMessage = role === "owner"
+            ? "Workspace ownership transferred. Your role is now Committee Admin."
+            : "Guest access role updated to " + this.roleLabel(role) + ".";
+          if (role === "owner") {
+            await this.loadUserContext(this.authSession, true);
+            this.go("dashboard");
+          } else {
+            await this.loadInvitationRoster();
+          }
+        } catch (err) {
+          this.invitationError = err?.message || "Could not change guest access.";
+          await this.loadInvitationRoster();
+        } finally {
+          this.inviteRevokeBusy = false;
+        }
+      },
+      async revokeGuestAccess(membershipId) {
+        if (!this.canManageInvitations || !membershipId || this.inviteRevokeBusy) return;
+        const guest = this.organizationMembers.find(row => row.id === membershipId && row.isGuest);
+        if (!guest || guest.status !== "active" || guest.userId === this.authUser?.id) return;
+        if (!window.confirm("Revoke demo access for " + guest.email + "? Their current session will lose access to committee records.")) return;
+        this.invitationError = "";
+        this.invitationMessage = "";
+        this.inviteRevokeBusy = true;
+        try {
+          const { data, error } = await window.supabaseClient.rpc("owner_revoke_guest_membership", {
+            p_membership_id: membershipId
+          });
+          if (error) throw error;
+          if (data !== true) throw new Error("This guest access is no longer active.");
+          this.invitationMessage = "Guest access revoked for " + guest.email + ".";
+          await this.loadInvitationRoster();
+        } catch (err) {
+          this.invitationError = err?.message || "Could not revoke guest access.";
+          await this.loadInvitationRoster();
+        } finally {
+          this.inviteRevokeBusy = false;
         }
       },
       async createInvitation() {
@@ -735,6 +827,7 @@
         this.authUser = null;
         this.authSession = null;
         this.profile = null;
+        this.guestAccessError = "";
         this.memberships = [];
         this.currentMembership = null;
         this.currentOrganization = null;
@@ -1317,6 +1410,7 @@
         this.showActionModal = true;
       },
       async unlinkAction(actionId, linkId) {
+        if (!this.canContributeActions) { this.toast("Read-only guest access cannot change carry-forward links."); return; }
         const action=this.actions.find(a=>a.id===actionId);
         const link=this.workItemLinks.find(item=>item.id===linkId&&item.action_item_id===actionId);
         const org=this.currentOrganization?.id;
