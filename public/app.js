@@ -632,16 +632,23 @@
           this.membersLoading = false;
         }
       },
-      async changeGuestRole(membershipId, role) {
-        if (!this.canManageInvitations || !membershipId) return;
+      async changeMemberRole(membershipId, role) {
+        if (!this.canManageInvitations || !membershipId || this.inviteRevokeBusy) return;
         if (!["owner", "admin", "member", "viewer"].includes(role)) {
           this.invitationError = "Choose a valid role.";
           await this.loadInvitationRoster();
           return;
         }
-        const guest = this.organizationMembers.find(row => row.id === membershipId && row.isGuest);
-        if (!guest || guest.status !== "active" || guest.userId === this.authUser?.id) return;
-        if (role === "owner" && !window.confirm("Transfer workspace ownership to this guest? Your own role will become Committee Admin and you will lose Owner-only access.")) {
+        const member = this.organizationMembers.find(row => row.id === membershipId);
+        if (!member || member.status !== "active" || !member.userId || member.userId === this.authUser?.id) {
+          await this.loadInvitationRoster();
+          return;
+        }
+        if (member.role === role) return;
+        const confirmation = role === "owner"
+          ? "Add " + member.name + " as another Workspace Owner? Your own Owner access will remain unchanged."
+          : "Change " + member.name + "'s role to " + this.roleLabel(role) + "?";
+        if (!window.confirm(confirmation)) {
           await this.loadInvitationRoster();
           return;
         }
@@ -649,23 +656,18 @@
         this.invitationMessage = "";
         this.inviteRevokeBusy = true;
         try {
-          const { data, error } = await window.supabaseClient.rpc("owner_change_guest_membership_role", {
+          const { data, error } = await window.supabaseClient.rpc("owner_change_organization_member_role", {
             p_membership_id: membershipId,
             p_role: role
           });
           if (error) throw error;
-          if (!data?.ok) throw new Error("The guest role was not changed.");
+          if (!data?.ok) throw new Error("The member role was not changed.");
           this.invitationMessage = role === "owner"
-            ? "Workspace ownership transferred. Your role is now Committee Admin."
-            : "Guest access role updated to " + this.roleLabel(role) + ".";
-          if (role === "owner") {
-            await this.loadUserContext(this.authSession, true);
-            this.go("dashboard");
-          } else {
-            await this.loadInvitationRoster();
-          }
+            ? member.name + " is now an additional Workspace Owner. Your own role remains Workspace Owner."
+            : member.name + "'s role was changed to " + this.roleLabel(role) + ".";
+          await this.loadInvitationRoster();
         } catch (err) {
-          this.invitationError = err?.message || "Could not change guest access.";
+          this.invitationError = err?.message || "Could not change member access.";
           await this.loadInvitationRoster();
         } finally {
           this.inviteRevokeBusy = false;

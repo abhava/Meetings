@@ -210,14 +210,14 @@
       </section>
       <section x-show="page==='members'" x-cloak>
         <div class="page-title-row">
-          <div><div class="eyebrow">ACCESS / ADMINISTRATION</div><h1>Members & invitations</h1><p class="page-subtitle">Only the active committee owner can manage members and invitations. Committee invitations require email verification and acceptance; demo guests receive Viewer access only after verifying their email.</p></div>
+          <div><div class="eyebrow">ACCESS / ADMINISTRATION</div><h1>Members & invitations</h1><p class="page-subtitle">Any active Workspace Owner can manage member roles and invitations. Multiple Owners are supported. Committee invitations require email verification and acceptance; demo guests receive Viewer access only after verifying their email.</p></div>
           <button class="btn btn-secondary" @click="loadInvitationRoster()" :disabled="membersLoading">Refresh list ↻</button>
         </div>
         <div class="panel invitation-create-panel">
           <div class="panel-header"><div><h2>Invite a committee member</h2><p>A sign-in link is emailed to the invited address. Invitations expire after 7 days and can be revoked before acceptance.</p></div></div>
           <form class="invitation-form" @submit.prevent="createInvitation()">
             <div class="form-field"><label for="inviteEmail">INVITEE EMAIL ADDRESS</label><input id="inviteEmail" type="email" required maxlength="254" autocomplete="off" x-model.trim="inviteEmail" placeholder="member@example.com"></div>
-            <div class="form-field"><label for="inviteRole">PREDEFINED ROLE</label><select id="inviteRole" x-model="inviteRole"><option value="member">Regular member</option><option value="admin">Admin</option><option value="owner">Owner — transfers ownership when accepted</option></select></div>
+            <div class="form-field"><label for="inviteRole">PREDEFINED ROLE</label><select id="inviteRole" x-model="inviteRole"><option value="member">Regular member</option><option value="admin">Admin</option><option value="owner">Additional Workspace Owner</option></select></div>
             <button type="submit" class="btn btn-primary" :disabled="inviteBusy"><span x-show="!inviteBusy">Create invitation</span><span x-show="inviteBusy">Creating…</span></button>
           </form>
           <div class="auth-alert auth-alert-error" x-show="invitationError" x-text="invitationError"></div>
@@ -232,18 +232,18 @@
           <div class="schedule-state" x-show="membersLoading"><span class="auth-spinner"></span><span>Loading members and invitations…</span></div>
           <div class="schedule-state schedule-state-error" x-show="!membersLoading && rosterError"><strong>Could not load the access roster</strong><span x-text="rosterError"></span></div>
           <div class="invitation-table" x-show="!membersLoading">
-            <div class="table-head invitation-member-head"><span>MEMBER</span><span>ROLE / ACCESS</span><span>STATUS / ACTION</span></div>
+            <div class="table-head invitation-member-head"><span>MEMBER</span><span>ROLE</span><span>STATUS</span><span>ACTION</span></div>
             <template x-for="member in organizationMembers" :key="member.id"><div class="invitation-table-row invitation-member-head">
               <span class="invitation-person"><strong x-text="member.name"></strong><small x-text="member.email"></small><small x-show="member.isGuest">Self-registered guest · email verified</small></span>
-              <span>
-                <select x-show="member.isGuest && member.status==='active' && member.userId!==authUser?.id" :value="member.role" @change="changeGuestRole(member.id,$event.target.value)" :disabled="inviteRevokeBusy" aria-label="Change guest role">
+              <span><span class="status-pill" x-text="roleLabel(member.role)"></span></span>
+              <span><span class="status-pill" :class="member.status==='active'?'pill-scheduled':''" x-text="member.status==='suspended' && member.isGuest?'revoked':member.status"></span></span>
+              <span class="member-access-actions">
+                <select x-show="member.status==='active' && member.userId && member.userId!==authUser?.id" :value="member.role" @change="changeMemberRole(member.id,$event.target.value)" :disabled="inviteRevokeBusy" aria-label="Change member role">
                   <option value="viewer">Read-only viewer</option><option value="member">Committee member</option><option value="admin">Committee admin</option><option value="owner">Workspace owner</option>
                 </select>
-                <span class="status-pill" x-show="!member.isGuest || member.status!=='active' || member.userId===authUser?.id" x-text="roleLabel(member.role)"></span>
-              </span>
-              <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <span class="status-pill" :class="member.status==='active'?'pill-scheduled':''" x-text="member.status==='suspended' && member.isGuest?'revoked':member.status"></span>
-                <button class="text-action" x-show="member.isGuest && member.status==='active' && member.userId!==authUser?.id" :disabled="inviteRevokeBusy" @click="revokeGuestAccess(member.id)">Revoke</button>
+                <span class="muted-cell" x-show="member.userId===authUser?.id">Current account</span>
+                <button class="text-action" x-show="member.isGuest && member.status==='active' && member.userId!==authUser?.id" :disabled="inviteRevokeBusy" @click="revokeGuestAccess(member.id)">Revoke guest</button>
+                <span class="muted-cell" x-show="member.isGuest && member.status!=='active'">No active access</span>
               </span>
             </div></template>
             <div class="empty-state" x-show="!membersLoading && organizationMembers.length===0 && !rosterError"><strong>No active members were returned</strong></div>
@@ -257,7 +257,7 @@
             <div class="empty-state" x-show="invitationRows.length===0 && !membersLoading"><strong>No invitation history found</strong><p>New invitations will appear here.</p></div>
           </div>
         </div>
-        <div class="carry-forward-note"><span>i</span><div><strong>Owner-only access</strong><p>Only the active committee owner can open this page, create invitations, review invitation history, revoke invitations, or assign an invitee's role. Self-registered guests can be assigned a different role or have their demo access revoked. Guest email addresses are verified before they receive Viewer access.</p></div></div>
+        <div class="carry-forward-note"><span>i</span><div><strong>Workspace Owner access</strong><p>Any active Workspace Owner can manage this roster. The Action column lets an Owner change another active member's role, including adding additional Workspace Owners. Multiple Owners may coexist; changing another member's role does not change your own access. Self-registered guests can also have their demo access revoked. Guest email addresses are verified before Viewer access is granted.</p></div></div>
       </section>
     </div>
   </main>
